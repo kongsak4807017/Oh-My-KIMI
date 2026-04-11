@@ -1,5 +1,5 @@
 {
-  "name": "oh-my-kimi",
+  "name": "omk-cli",
   "version": "0.1.0",
   "description": "Multi-agent orchestration CLI for Kimi AI - 36+ skills for autonomous development",
   "type": "module",
@@ -55,6 +55,14 @@
   "homepage": "https://github.com/yourusername/oh-my-kimi#readme",
   "license": "MIT",
   "preferGlobal": true,
+  "peerDependencies": {
+    "playwright": "^1.40.0"
+  },
+  "peerDependenciesMeta": {
+    "playwright": {
+      "optional": true
+    }
+  },
   "dependencies": {
     "@iarna/toml": "^2.2.5",
     "zod": "^4.3.6"

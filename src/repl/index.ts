@@ -7,7 +7,11 @@ import { createInterface, Interface as ReadlineInterface } from 'readline';
 import { stdin, stdout } from 'process';
 import { existsSync, readFileSync } from 'fs';
 import { join } from 'path';
-import { KimiClient, KimiMessage } from '../api/kimi.js';
+import { 
+  ProviderManager, 
+  getProviderManager,
+  ChatMessage 
+} from '../providers/index.js';
 import { 
   writeModeState, 
   clearModeState, 
@@ -19,7 +23,7 @@ import { startMCPServer, stopMCPServer } from '../mcp/server.js';
 
 // REPL State
 interface REPLState {
-  history: KimiMessage[];
+  history: ChatMessage[];
   currentSkill: string | null;
   context: {
     cwd: string;
@@ -66,14 +70,14 @@ const BUILTIN_COMMANDS = [
 ];
 
 export class OMKREPL {
-  private client: KimiClient;
+  private providerManager: ProviderManager;
   private rl: ReadlineInterface;
   private state: REPLState;
   private pluginManager: PluginManager;
   private isRunning: boolean = false;
 
   constructor(private cwd: string = process.cwd()) {
-    this.client = new KimiClient();
+    this.providerManager = getProviderManager();
     this.state = {
       history: [],
       currentSkill: null,
@@ -124,8 +128,26 @@ export class OMKREPL {
     return [hits.length ? hits : completions, line];
   }
 
-  async start(): Promise<void> {
+  async start(options?: { provider?: string; reasoning?: string }): Promise<void> {
     console.log('\n🚀 Welcome to Oh-my-KIMI (OMK)');
+    
+    // Initialize provider
+    try {
+      const providerType = (options?.provider as 'api' | 'browser' | 'cli' | 'auto') || 'auto';
+      await this.providerManager.initialize({
+        type: providerType,
+        reasoning: (options?.reasoning as 'low' | 'medium' | 'high') || 'medium',
+      });
+      
+      const currentType = this.providerManager.getCurrentType();
+      console.log(`   Provider: ${currentType} (reasoning: ${options?.reasoning || 'medium'})`);
+    } catch (err) {
+      console.error('\n❌ Failed to initialize provider:');
+      console.error(`   ${err instanceof Error ? err.message : err}`);
+      console.error('\n💡 Try: omk --provider=browser (for subscription mode)');
+      process.exit(1);
+    }
+    
     console.log('Type /help for available commands, or /exit to quit.\n');
 
     // Load plugins
@@ -277,21 +299,22 @@ export class OMKREPL {
     console.log(`\x1b[36m[Activating skill: ${skillName}]\x1b[0m`);
 
     // Create system message with skill instructions
-    const systemMessage: KimiMessage = {
+    const systemMessage: ChatMessage = {
       role: 'system',
       content: `You are executing the ${skillName} skill. Follow these instructions:\n\n${skillContent}\n\nUser input: ${skillArgs}`,
     };
 
     // Execute skill
     try {
-      const response = await this.client.complete({
+      const provider = this.providerManager.getProvider();
+      const response = await provider.chat({
         messages: [
           systemMessage,
           ...this.state.history.slice(-5),
         ],
       });
 
-      const content = response.choices[0]?.message?.content || '';
+      const content = response.content || '';
       console.log('\n' + content + '\n');
       
       this.state.history.push({ role: 'assistant', content });
@@ -330,18 +353,18 @@ export class OMKREPL {
       // Stream response
       process.stdout.write('\x1b[36m');
       
+      const provider = this.providerManager.getProvider();
       let fullResponse = '';
-      const stream = this.client.stream({
+      
+      for await (const chunk of provider.stream({
         messages: [
           { role: 'system', content: systemPrompt },
           ...this.state.history.slice(-10),
         ],
-      });
-
-      for await (const chunk of stream) {
-        const content = chunk.choices[0]?.delta?.content || '';
-        process.stdout.write(content);
-        fullResponse += content;
+      })) {
+        process.stdout.write(chunk.content);
+        fullResponse += chunk.content;
+        if (chunk.done) break;
       }
 
       process.stdout.write('\x1b[0m\n\n');
@@ -568,7 +591,10 @@ export class OMKREPL {
 }
 
 // Factory function
-export async function startREPL(cwd?: string): Promise<void> {
+export async function startREPL(
+  cwd?: string, 
+  options?: { provider?: string; reasoning?: string }
+): Promise<void> {
   const repl = new OMKREPL(cwd);
-  await repl.start();
+  await repl.start(options);
 }

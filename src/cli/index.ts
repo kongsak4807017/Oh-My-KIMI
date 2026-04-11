@@ -44,6 +44,10 @@ Usage:
   omk version            Show version information
 
 Options:
+  --provider <type>      Kimi provider: api, browser, cli, auto (default: auto)
+  --api                  Shortcut for --provider=api
+  --browser              Shortcut for --provider=browser (uses subscription)
+  --cli                  Shortcut for --provider=cli
   --high                 Use high reasoning effort
   --yolo                 Bypass confirmations (dangerous)
   --force                Force reinstall
@@ -51,9 +55,15 @@ Options:
   --verbose              Show detailed output
 
 Environment Variables:
-  KIMI_API_KEY           Your Moonshot AI API key
+  KIMI_API_KEY           Your Moonshot AI API key (for --provider=api)
   KIMI_BASE_URL          API base URL (default: https://api.moonshot.cn/v1)
   OMK_MODEL              Default model (default: kimi-k2-0711-preview)
+
+Provider Modes:
+  api                    Use Kimi API (requires KIMI_API_KEY)
+  browser                Use Kimi web interface (uses your subscription, free!)
+  cli                    Use official Kimi CLI (if installed)
+  auto                   Auto-detect best available (default)
 `;
 
 const VERSION = "0.1.0";
@@ -406,27 +416,38 @@ function version(): void {
 
 // Launch command (main entry)
 async function launch(args: string[]): Promise<void> {
-  // Check prerequisites
-  if (!process.env.KIMI_API_KEY) {
-    console.error('❌ Error: KIMI_API_KEY environment variable is not set');
-    console.error('Please set your Moonshot AI API key:');
-    console.error('  export KIMI_API_KEY=your_key_here');
-    process.exit(1);
-  }
-
   const flags = parseFlags(args);
   
-  console.log('🚀 Launching Kimi session...');
-  console.log(`Model: ${flags.model || 'kimi-k2-0711-preview'}`);
+  // Check prerequisites based on provider
+  if (flags.provider === 'api' && !process.env.KIMI_API_KEY) {
+    console.error('❌ Error: KIMI_API_KEY required for API mode');
+    console.error('   Set it with: export KIMI_API_KEY=your_key');
+    console.error('   Or use: omk --provider=browser (subscription mode)');
+    process.exit(1);
+  }
+  
+  console.log('🚀 Launching Oh-my-KIMI...');
+  console.log(`Provider: ${flags.provider || 'auto'}`);
   console.log(`Reasoning: ${flags.reasoning || 'medium'}`);
   
   if (flags.yolo) {
     console.log('⚠️  YOLO mode enabled - bypassing confirmations');
   }
+  
+  // Show provider hint
+  if (!flags.provider || flags.provider === 'auto') {
+    if (!process.env.KIMI_API_KEY) {
+      console.log('\n💡 No API key found. Will try browser mode (subscription)');
+      console.log('   Or get API key: https://platform.moonshot.cn/');
+    }
+  }
 
   // Start interactive REPL
   const { startREPL } = await import('../repl/index.js');
-  await startREPL(process.cwd());
+  await startREPL(process.cwd(), {
+    provider: flags.provider,
+    reasoning: flags.reasoning,
+  });
 }
 
 function parseFlags(args: string[]): { 
@@ -434,8 +455,9 @@ function parseFlags(args: string[]): {
   high?: boolean;
   model?: string;
   reasoning?: string;
+  provider?: string;
 } {
-  const flags: { yolo?: boolean; high?: boolean; model?: string; reasoning?: string } = {};
+  const flags: { yolo?: boolean; high?: boolean; model?: string; reasoning?: string; provider?: string } = {};
   
   for (let i = 0; i < args.length; i++) {
     const arg = args[i];
@@ -444,6 +466,15 @@ function parseFlags(args: string[]): {
     } else if (arg === '--high') {
       flags.high = true;
       flags.reasoning = 'high';
+    } else if (arg === '--provider' && args[i + 1]) {
+      flags.provider = args[i + 1];
+      i++;
+    } else if (arg === '--api') {
+      flags.provider = 'api';
+    } else if (arg === '--browser') {
+      flags.provider = 'browser';
+    } else if (arg === '--cli') {
+      flags.provider = 'cli';
     } else if (arg === '--model' && args[i + 1]) {
       flags.model = args[i + 1];
       i++;
@@ -476,8 +507,15 @@ async function invokeSkill(skillName: string, args: string[]): Promise<void> {
 
 // Main CLI handler
 export async function main(args: string[]): Promise<void> {
-  const command = args[0];
-  const restArgs = args.slice(1);
+  // Handle flags that look like commands (e.g., --browser, --api)
+  let command = args[0];
+  let restArgs = args.slice(1);
+  
+  // If first arg is a flag starting with --, treat as launch command
+  if (command && command.startsWith('--')) {
+    command = undefined as any;
+    restArgs = args;
+  }
   
   const flags = {
     force: args.includes('--force'),
