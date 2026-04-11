@@ -1,6 +1,6 @@
 {
   "name": "omk-cli",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "Multi-agent orchestration CLI for Kimi AI - 36+ skills for autonomous development",
   "type": "module",
   "main": "dist/index.js",
@@ -47,12 +47,12 @@
   "author": "Oh-my-KIMI Team <omk@example.com>",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/yourusername/oh-my-kimi.git"
+    "url": "git+https://github.com/kongsak4807017/oh-my-kimi.git"
   },
   "bugs": {
-    "url": "https://github.com/yourusername/oh-my-kimi/issues"
+    "url": "https://github.com/kongsak4807017/oh-my-kimi/issues"
   },
-  "homepage": "https://github.com/yourusername/oh-my-kimi#readme",
+  "homepage": "https://github.com/kongsak4807017/oh-my-kimi#readme",
   "license": "MIT",
   "preferGlobal": true,
   "peerDependencies": {
