@@ -495,18 +495,19 @@ async function launch(args: string[]): Promise<void> {
     }
   }
 
-  // Check for TUI mode
-  const useTUI = args.includes('--tui');
+  // Check for TUI mode (only on supported terminals)
+  const useTUI = args.includes('--tui') && process.platform !== 'win32';
   
   if (useTUI) {
-    // Start TUI mode
+    // Start TUI mode (Unix/Mac only)
     await launchTUI(flags);
   } else {
-    // Start classic REPL mode
+    // Start classic REPL mode (works everywhere including Windows CMD)
     const { startREPL } = await import('../repl/index.js');
     await startREPL(process.cwd(), {
       provider: flags.provider,
       reasoning: flags.reasoning,
+      yolo: flags.yolo,
     });
   }
 }

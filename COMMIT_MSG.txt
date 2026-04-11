@@ -1,11 +1,6 @@
-feat: add full TUI (Terminal User Interface) mode
+fix: disable TUI on Windows, use classic REPL instead
 
-- Add --tui flag for full terminal UI experience
-- Create Ink-based React components:
-  - Header: Shows mode, provider, reasoning level
-  - Footer: Context usage bar with progress indicator
-  - AgentPanel: Shows active agents and recent activities
-- Add real-time activity logging
-- Add keyboard shortcuts: Ctrl+X (toggle mode), Shift+Z (agents panel)
-- Custom spinner component for loading states
-- Integrate TUI launcher in CLI
+- Ink TUI requires raw mode which Windows CMD does not support
+- Disable TUI on Windows platform (process.platform !== win32)
+- Add yolo option to REPL for consistency
+- Show YOLO warning in REPL mode

@@ -131,7 +131,10 @@ export class OMKREPL {
     return [hits.length ? hits : completions, line];
   }
 
-  async start(options?: { provider?: string; reasoning?: string }): Promise<void> {
+  async start(options?: { provider?: string; reasoning?: string; yolo?: boolean }): Promise<void> {
+    if (options?.yolo) {
+      console.log('\n[WARNING] YOLO mode enabled - bypassing confirmations');
+    }
     console.log('\nWelcome to Oh-my-KIMI (OMK)');
     
     // Initialize provider
@@ -608,7 +611,7 @@ export class OMKREPL {
 // Factory function
 export async function startREPL(
   cwd?: string, 
-  options?: { provider?: string; reasoning?: string }
+  options?: { provider?: string; reasoning?: string; yolo?: boolean }
 ): Promise<void> {
   const repl = new OMKREPL(cwd);
   await repl.start(options);
