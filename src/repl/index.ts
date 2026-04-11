@@ -354,21 +354,30 @@ export class OMKREPL {
   }
 
   private async handleToolCommand(toolName: string, argsStr: string): Promise<void> {
-    console.log(`\x1b[36m[Executing tool: ${toolName}]\x1b[0m`);
+    // Import activity logger
+    const { getActivityLogger } = await import('./activity-logger.js');
+    const logger = getActivityLogger();
+    
+    // Parse JSON arguments
+    let args: Record<string, any> = {};
+    if (argsStr.trim()) {
+      try {
+        args = JSON.parse(argsStr);
+      } catch {
+        args = { path: argsStr.trim() };
+      }
+    }
+
+    // Log tool call
+    logger.addActivity({
+      type: 'tool_call',
+      message: `Tool: ${toolName}`,
+      status: 'running',
+      toolName,
+      toolArgs: args,
+    });
     
     try {
-      // Parse JSON arguments
-      let args: Record<string, any> = {};
-      if (argsStr.trim()) {
-        try {
-          args = JSON.parse(argsStr);
-        } catch {
-          // If not valid JSON, treat as single string argument
-          args = { path: argsStr.trim() };
-        }
-      }
-
-      // Map tool names
       const toolMap: Record<string, string> = {
         'read_file': '$read_file',
         'write_file': '$write_file',
@@ -385,17 +394,27 @@ export class OMKREPL {
 
       const toolFullName = toolMap[toolName] || `$${toolName}`;
       
-      // Import and dispatch tool
       const { getToolDispatcher } = await import('../tools/index.js');
       const dispatcher = getToolDispatcher(this.cwd);
       
       const result = await dispatcher.dispatch(toolFullName, args);
       
-      console.log('\x1b[32m[Result]\x1b[0m');
-      console.log(JSON.stringify(result, null, 2));
+      // Log tool result
+      logger.addActivity({
+        type: 'tool_result',
+        message: `Result: ${toolName}`,
+        status: 'completed',
+        toolName,
+        toolResult: result,
+      });
       
     } catch (err) {
-      console.error('\x1b[31m[Tool Error]:', err instanceof Error ? err.message : String(err), '\x1b[0m');
+      logger.addActivity({
+        type: 'error',
+        message: `Tool failed: ${toolName}`,
+        status: 'failed',
+        details: err instanceof Error ? err.message : String(err),
+      });
     }
     
     this.rl.setPrompt(this.getPrompt());

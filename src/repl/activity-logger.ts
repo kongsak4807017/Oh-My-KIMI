@@ -7,11 +7,14 @@ import { stdout } from 'process';
 
 export interface Activity {
   id: string;
-  type: 'action' | 'thinking' | 'reading' | 'writing' | 'command' | 'complete' | 'error';
+  type: 'action' | 'thinking' | 'reading' | 'writing' | 'command' | 'complete' | 'error' | 'tool_call' | 'tool_result';
   message: string;
   timestamp: Date;
   status: 'running' | 'completed' | 'failed';
   details?: string;
+  toolName?: string;
+  toolArgs?: any;
+  toolResult?: any;
 }
 
 export class ActivityLogger {
@@ -85,6 +88,8 @@ export class ActivityLogger {
       command: '⚙️',
       complete: '✅',
       error: '❌',
+      tool_call: '🔧',
+      tool_result: '📤',
     };
     
     return icons[type] || '•';
@@ -102,6 +107,8 @@ export class ActivityLogger {
       command: '\x1b[90m',   // gray
       complete: '\x1b[32m',  // green
       error: '\x1b[31m',     // red
+      tool_call: '\x1b[96m', // bright cyan
+      tool_result: '\x1b[95m', // bright magenta
     };
     
     return colors[type] || '\x1b[0m';
@@ -111,6 +118,7 @@ export class ActivityLogger {
     const icon = this.getIcon(activity.type, activity.status);
     const color = this.getColor(activity.type, activity.status);
     const reset = '\x1b[0m';
+    const dim = '\x1b[2m';
     
     // Format time
     const time = activity.timestamp.toLocaleTimeString('en-US', { 
@@ -127,6 +135,23 @@ export class ActivityLogger {
     // If has details, print on next line
     if (activity.details) {
       console.log(`  ${color}→ ${activity.details}${reset}`);
+    }
+    
+    // Tool call details
+    if (activity.type === 'tool_call' && activity.toolArgs) {
+      const argsStr = JSON.stringify(activity.toolArgs, null, 2).split('\n').slice(0, 5).join('\n  ');
+      console.log(`  ${dim}Args: ${argsStr}${reset}`);
+    }
+    
+    // Tool result details
+    if (activity.type === 'tool_result' && activity.toolResult) {
+      let resultStr = '';
+      if (typeof activity.toolResult === 'string') {
+        resultStr = activity.toolResult.slice(0, 200);
+      } else {
+        resultStr = JSON.stringify(activity.toolResult, null, 2).split('\n').slice(0, 5).join('\n  ');
+      }
+      console.log(`  ${dim}Result: ${resultStr}${reset}`);
     }
   }
 
