@@ -66,7 +66,9 @@ export class CLIProvider implements Provider {
 
     return new Promise((resolve, reject) => {
       // Kimi CLI v1.24+ syntax: kimi --print --final-message-only -p "prompt"
-      const args = ['--print', '--final-message-only', '-p', content];
+      const useStdin = process.platform === 'win32' && content.includes(' ');
+      
+      const args = ['--print', '--final-message-only'];
       
       if (this.config.reasoning === 'high') {
         args.push('--thinking');
@@ -74,6 +76,12 @@ export class CLIProvider implements Provider {
       
       // Add yolo mode to prevent interactive prompts
       args.push('--yolo');
+      
+      if (useStdin) {
+        args.push('--input-format', 'text');
+      } else {
+        args.push('-p', content);
+      }
       
       // Fix Windows UTF-8 encoding
       const isWindows = process.platform === 'win32';
@@ -84,6 +92,12 @@ export class CLIProvider implements Provider {
         shell: true,
         env,
       });
+      
+      // Send content via stdin if using stdin mode
+      if (useStdin) {
+        child.stdin?.write(content);
+        child.stdin?.end();
+      }
       
       let output = '';
       let error = '';
@@ -143,8 +157,10 @@ export class CLIProvider implements Provider {
     }
 
     // Kimi CLI v1.24+ syntax: kimi --print --final-message-only -p "prompt"
-    // Note: Use --quiet for cleaner output, --print enables non-interactive mode
-    const args = ['--print', '--final-message-only', '-p', content];
+    // Note: On Windows with spaces, use stdin instead of -p flag
+    const useStdin = process.platform === 'win32' && content.includes(' ');
+    
+    const args = ['--print', '--final-message-only'];
     
     // Add thinking mode if reasoning is high
     if (this.config.reasoning === 'high') {
@@ -153,6 +169,14 @@ export class CLIProvider implements Provider {
     
     // Add yolo mode to prevent interactive prompts
     args.push('--yolo');
+    
+    if (useStdin) {
+      // Use stdin for complex prompts on Windows
+      args.push('--input-format', 'text');
+    } else {
+      // Use -p flag for simple prompts
+      args.push('-p', content);
+    }
 
     const cliPath = this.config.cliPath ?? 'kimi';
     
@@ -167,6 +191,12 @@ export class CLIProvider implements Provider {
     }
     
     const child = spawn(cliPath, args, spawnOptions);
+    
+    // Send content via stdin if using stdin mode
+    if (useStdin) {
+      child.stdin?.write(content);
+      child.stdin?.end();
+    }
 
     let buffer = '';
     let hasError = false;

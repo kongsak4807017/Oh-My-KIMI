@@ -1,5 +1,5 @@
-fix: wait for process exit before yielding output
+fix: use stdin mode for complex prompts on Windows
 
-- Replace polling loop with Promise-based exit waiting
-- Fix issue where output was lost when Kimi CLI exited quickly
-- Ensure all output is captured before yielding
+- Detect when content has spaces on Windows platform
+- Use --input-format text with stdin instead of -p flag
+- Fixes argument parsing issues with spaces in Thai text
