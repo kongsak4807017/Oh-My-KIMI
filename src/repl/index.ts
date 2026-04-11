@@ -89,6 +89,11 @@ export class OMKREPL {
     this.pluginManager = new PluginManager(cwd);
     this.globalOmkPath = join(homedir(), '.omk');
     
+    // Enable keypress events
+    if (stdin.isTTY) {
+      stdin.setRawMode(true);
+    }
+    
     this.rl = createInterface({
       input: stdin,
       output: stdout,
@@ -115,6 +120,37 @@ export class OMKREPL {
       this.shutdown();
     });
 
+    // Handle keypress for guides
+    process.stdin.on('keypress', (str, key) => {
+      if (key.name === 'return' || key.name === 'enter') return;
+      
+      const currentLine = this.rl.line || '';
+      
+      // Show guide for /
+      if (currentLine === '/' || currentLine === '') {
+        if (str === '/') {
+          console.log('\n\x1b[90mCommands: /help /tools /status /settings /exit\x1b[0m');
+          this.rl.prompt();
+        }
+      }
+      
+      // Show guide for $
+      if (currentLine === '$' || currentLine === '') {
+        if (str === '$') {
+          console.log('\n\x1b[90mTools: $read_file $write_file $web_fetch $diagnostics $execute_command\x1b[0m');
+          this.rl.prompt();
+        }
+      }
+      
+      // Show guide for @
+      if (currentLine.endsWith('@') || currentLine === '') {
+        if (str === '@') {
+          console.log('\n\x1b[90mType @filename to include file content\x1b[0m');
+          this.rl.prompt();
+        }
+      }
+    });
+
     // Handle Ctrl+C gracefully
     process.on('SIGINT', () => {
       console.log('\nUse /exit or /quit to exit properly.');
@@ -123,11 +159,45 @@ export class OMKREPL {
   }
 
   private completer(line: string): [string[], string] {
-    const completions = [
-      ...SKILL_PREFIXES,
-      ...BUILTIN_COMMANDS,
-    ];
+    // Command mode (starts with /)
+    if (line.startsWith('/')) {
+      const cmd = line.slice(1);
+      const matches = BUILTIN_COMMANDS.filter(c => c.startsWith('/' + cmd));
+      return [matches, line];
+    }
     
+    // Tool mode (starts with $)
+    if (line.startsWith('$')) {
+      const tool = line.slice(1);
+      const tools = [
+        '$read_file', '$write_file', '$list_directory', '$search_files',
+        '$web_fetch', '$diagnostics', '$document_symbols', '$find_references',
+        '$execute_command', '$memory_read', '$memory_write',
+      ];
+      const matches = tools.filter(t => t.startsWith('$' + tool));
+      return [matches, line];
+    }
+    
+    // File mention mode (starts with @)
+    if (line.includes('@')) {
+      const afterAt = line.slice(line.lastIndexOf('@') + 1);
+      try {
+        const { getFileSystemTools } = require('../tools/file-system.js');
+        const fsTools = getFileSystemTools(this.cwd);
+        const { entries } = fsTools.listDirectory({ path: '.', recursive: true });
+        const files = entries
+          .filter((e: any) => e.type === 'file')
+          .map((e: any) => '@' + e.name)
+          .filter((f: string) => f.startsWith('@' + afterAt))
+          .slice(0, 20);
+        return [files, '@' + afterAt];
+      } catch {
+        return [[], line];
+      }
+    }
+    
+    // Default: skills + commands
+    const completions = [...SKILL_PREFIXES, ...BUILTIN_COMMANDS];
     const hits = completions.filter(c => c.startsWith(line));
     return [hits.length ? hits : completions, line];
   }
