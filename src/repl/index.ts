@@ -7,6 +7,7 @@ import { createInterface, Interface as ReadlineInterface } from 'readline';
 import { stdin, stdout } from 'process';
 import { existsSync, readFileSync } from 'fs';
 import { join } from 'path';
+import { homedir } from 'os';
 import { 
   ProviderManager, 
   getProviderManager,
@@ -75,6 +76,7 @@ export class OMKREPL {
   private state: REPLState;
   private pluginManager: PluginManager;
   private isRunning: boolean = false;
+  private globalOmkPath: string;
 
   constructor(private cwd: string = process.cwd()) {
     this.providerManager = getProviderManager();
@@ -84,6 +86,7 @@ export class OMKREPL {
       context: { cwd },
     };
     this.pluginManager = new PluginManager(cwd);
+    this.globalOmkPath = join(homedir(), '.omk');
     
     this.rl = createInterface({
       input: stdin,
@@ -272,18 +275,27 @@ export class OMKREPL {
     const skillName = input.split(' ')[0].slice(1);
     const skillArgs = input.slice(input.indexOf(' ') + 1);
 
-    // Load skill definition
-    const skillPath = join(this.cwd, '.omk', 'skills', skillName, 'SKILL.md');
+    // Load skill definition - try local, then global
+    let skillPath = join(this.cwd, '.omk', 'skills', skillName, 'SKILL.md');
+    let skillSource = 'local';
+    
+    if (!existsSync(skillPath)) {
+      skillPath = join(this.globalOmkPath, 'skills', skillName, 'SKILL.md');
+      skillSource = 'global';
+    }
     
     if (!existsSync(skillPath)) {
       console.log(`\x1b[33mSkill not found: ${skillName}\x1b[0m`);
-      console.log('Available skills:');
-      this.showSkills();
+      console.log('Available skills: try /skills to list available skills');
       this.rl.prompt();
       return;
     }
 
     const skillContent = readFileSync(skillPath, 'utf-8');
+    
+    if (skillSource === 'global') {
+      console.log(`\x1b[36m[Loading skill from global: ${skillName}]\x1b[0m`);
+    }
 
     // Set current skill mode
     this.state.currentSkill = skillName;
@@ -329,12 +341,19 @@ export class OMKREPL {
   }
 
   private async handleChat(input: string): Promise<void> {
-    // Read AGENTS.md if exists
-    const agentsPath = join(this.cwd, 'AGENTS.md');
-    let systemPrompt = 'You are a helpful AI assistant for software development.';
+    // Read AGENTS.md if exists (local first, then global fallback)
+    const localAgentsPath = join(this.cwd, 'AGENTS.md');
+    const globalAgentsPath = join(this.globalOmkPath, 'AGENTS.md');
     
-    if (existsSync(agentsPath)) {
-      systemPrompt += '\n\nProject guidelines:\n' + readFileSync(agentsPath, 'utf-8');
+    let systemPrompt = 'You are a helpful AI assistant for software development.';
+    let agentsSource = '';
+    
+    if (existsSync(localAgentsPath)) {
+      systemPrompt += '\n\nProject guidelines (local AGENTS.md):\n' + readFileSync(localAgentsPath, 'utf-8');
+      agentsSource = 'local';
+    } else if (existsSync(globalAgentsPath)) {
+      systemPrompt += '\n\nProject guidelines (Global Root Agent):\n' + readFileSync(globalAgentsPath, 'utf-8');
+      agentsSource = 'global';
     }
 
     // Add context files if any

@@ -85,6 +85,45 @@ function getOmkPath(): string {
   return join(getProjectRoot(), OMK_DIR);
 }
 
+function getGlobalOmkPath(): string {
+  return OMK_CONFIG_DIR;
+}
+
+/**
+ * Get effective OMK path - prefers local, falls back to global
+ */
+function getEffectiveOmkPath(): string {
+  const localPath = getOmkPath();
+  if (existsSync(localPath)) {
+    return localPath;
+  }
+  const globalPath = getGlobalOmkPath();
+  ensureDir(globalPath);
+  return globalPath;
+}
+
+/**
+ * Get AGENTS.md path - prefers local, falls back to global
+ */
+function getAgentsPath(): string {
+  const localPath = join(getProjectRoot(), 'AGENTS.md');
+  if (existsSync(localPath)) {
+    return localPath;
+  }
+  const globalPath = join(getGlobalOmkPath(), 'AGENTS.md');
+  if (existsSync(globalPath)) {
+    return globalPath;
+  }
+  return localPath; // Return local path anyway (will fail gracefully)
+}
+
+/**
+ * Check if running with global fallback
+ */
+function isUsingGlobalFallback(): boolean {
+  return !existsSync(getOmkPath()) && existsSync(getGlobalOmkPath());
+}
+
 // Setup command
 async function setup(options: { force: boolean; dryRun: boolean; verbose: boolean }): Promise<void> {
   const cwd = getProjectRoot();
@@ -422,11 +461,17 @@ async function launch(args: string[]): Promise<void> {
   if (flags.provider === 'api' && !process.env.KIMI_API_KEY) {
     console.error('❌ Error: KIMI_API_KEY required for API mode');
     console.error('   Set it with: export KIMI_API_KEY=your_key');
-    console.error('   Or use: omk --provider=browser (subscription mode)');
+    console.error('   Or use: omk --browser (subscription mode, free!)');
     process.exit(1);
   }
   
   console.log('🚀 Launching Oh-my-KIMI...');
+  
+  // Show Root Agent status
+  if (isUsingGlobalFallback()) {
+    console.log('🌐 Global Root Agent active (no project setup needed)');
+  }
+  
   console.log(`Provider: ${flags.provider || 'auto'}`);
   console.log(`Reasoning: ${flags.reasoning || 'medium'}`);
   
@@ -438,11 +483,11 @@ async function launch(args: string[]): Promise<void> {
   if (!flags.provider || flags.provider === 'auto') {
     if (!process.env.KIMI_API_KEY) {
       console.log('\n💡 No API key found. Will try browser mode (subscription)');
-      console.log('   Or get API key: https://platform.moonshot.cn/');
+      console.log('   Tip: Use --browser flag to connect via your Kimi subscription');
     }
   }
 
-  // Start interactive REPL
+  // Start interactive REPL with global config support
   const { startREPL } = await import('../repl/index.js');
   await startREPL(process.cwd(), {
     provider: flags.provider,
