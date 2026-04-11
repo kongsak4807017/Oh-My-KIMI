@@ -35,7 +35,7 @@ export class ProviderManager {
     // Auto-detect best provider
     if (providerType === 'auto') {
       providerType = await this.autoDetectProvider();
-      console.log(`🤖 Auto-selected provider: ${providerType}`);
+      console.log(`[AUTO] Selected provider: ${providerType}`);
     }
 
     const provider = this.providers.get(providerType);
@@ -62,7 +62,7 @@ export class ProviderManager {
    * Auto-detect best available provider
    */
   private async autoDetectProvider(): Promise<ProviderType> {
-    console.log('🔍 Detecting best provider...');
+    console.log('[DETECT] Finding best provider...');
 
     // 1. Check for API key (fastest, most reliable)
     if (process.env.KIMI_API_KEY) {
@@ -71,7 +71,7 @@ export class ProviderManager {
         await api.initialize({ type: 'api', apiKey: process.env.KIMI_API_KEY });
         const available = await api.isAvailable();
         if (available) {
-          console.log('✅ Using Kimi API (KIMI_API_KEY found)');
+          console.log('[OK] Using Kimi API');
           return 'api';
         }
       } catch {
@@ -83,13 +83,13 @@ export class ProviderManager {
     const cli = this.providers.get('cli')!;
     const cliAvailable = await cli.isAvailable();
     if (cliAvailable) {
-      console.log('✅ Using Kimi CLI');
+      console.log('[OK] Using Kimi CLI');
       return 'cli';
     }
 
     // 3. Fall back to browser (subscription mode)
-    console.log('🌐 Falling back to Browser mode (subscription)');
-    console.log('   This requires you to be logged in to kimi.moonshot.cn');
+    console.log('[FALLBACK] Using Browser mode');
+    console.log('           Requires login at kimi.moonshot.cn');
     return 'browser';
   }
 

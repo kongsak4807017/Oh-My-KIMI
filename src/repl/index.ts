@@ -346,14 +346,11 @@ export class OMKREPL {
     const globalAgentsPath = join(this.globalOmkPath, 'AGENTS.md');
     
     let systemPrompt = 'You are a helpful AI assistant for software development.';
-    let agentsSource = '';
     
     if (existsSync(localAgentsPath)) {
       systemPrompt += '\n\nProject guidelines (local AGENTS.md):\n' + readFileSync(localAgentsPath, 'utf-8');
-      agentsSource = 'local';
     } else if (existsSync(globalAgentsPath)) {
       systemPrompt += '\n\nProject guidelines (Global Root Agent):\n' + readFileSync(globalAgentsPath, 'utf-8');
-      agentsSource = 'global';
     }
 
     // Add context files if any
@@ -369,8 +366,7 @@ export class OMKREPL {
     }
 
     try {
-      // Stream response
-      process.stdout.write('\x1b[36m');
+      console.log('[THINKING...]');
       
       const provider = this.providerManager.getProvider();
       let fullResponse = '';
@@ -386,11 +382,11 @@ export class OMKREPL {
         if (chunk.done) break;
       }
 
-      process.stdout.write('\x1b[0m\n\n');
+      console.log('\n');
       this.state.history.push({ role: 'assistant', content: fullResponse });
 
     } catch (err) {
-      console.error('\x1b[31mChat error:', err, '\x1b[0m');
+      console.error('[ERROR] Chat failed:', err instanceof Error ? err.message : String(err));
     }
   }
 

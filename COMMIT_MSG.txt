@@ -1,5 +1,8 @@
-fix: keep REPL alive on Windows and replace emoji with text
+fix: improve Windows compatibility and add debug logging
 
-- Add Promise-based wait loop to keep process alive until REPL closes
-- Replace Unicode emoji with text labels for Windows compatibility
-- Fix stdin/stdout handling on Windows CMD/PowerShell
+- Replace remaining emoji with text labels for Windows CMD
+- Add [THINKING...] indicator before AI response
+- Add better error handling in CLI provider stream
+- Add timeout protection (60s) for CLI requests
+- Fix ANSI color codes that cause display issues on Windows
+- Add debug output for provider detection

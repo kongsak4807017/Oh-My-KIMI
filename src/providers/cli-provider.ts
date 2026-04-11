@@ -118,39 +118,66 @@ export class CLIProvider implements Provider {
     const lastMessage = options.messages[options.messages.length - 1];
     const content = lastMessage?.content ?? '';
 
+    if (!content) {
+      yield { content: 'Error: No content to send', done: true };
+      return;
+    }
+
     const args = ['chat'];
     
     if (this.config.reasoning) {
       args.push('--reasoning', this.config.reasoning);
     }
 
-    const child = spawn(this.config.cliPath ?? 'kimi', args, {
+    const cliPath = this.config.cliPath ?? 'kimi';
+    
+    const child = spawn(cliPath, args, {
       stdio: ['pipe', 'pipe', 'pipe'],
       shell: true,
     });
 
+    // Send input immediately
     child.stdin?.write(content);
     child.stdin?.end();
 
     let buffer = '';
+    let hasError = false;
     
     child.stdout?.on('data', (data) => {
       buffer += data.toString();
     });
 
+    child.stderr?.on('data', (data) => {
+      const err = data.toString();
+      if (err.includes('error') || err.includes('Error')) {
+        hasError = true;
+        buffer += `[CLI Error: ${err}]`;
+      }
+    });
+
     // Yield chunks as they arrive
-    while (child.exitCode === null) {
+    let checks = 0;
+    const maxChecks = 600; // 60 seconds timeout
+    
+    while (child.exitCode === null && checks < maxChecks) {
       if (buffer.length > 0) {
         const chunk = buffer;
         buffer = '';
         yield { content: chunk, done: false };
       }
       await new Promise(r => setTimeout(r, 100));
+      checks++;
     }
 
     // Final buffer
     if (buffer.length > 0) {
       yield { content: buffer, done: false };
+    }
+
+    // Check if timed out
+    if (checks >= maxChecks && child.exitCode === null) {
+      child.kill();
+      yield { content: '\n[Error: Request timed out]', done: false };
     }
 
     yield { content: '', done: true };
