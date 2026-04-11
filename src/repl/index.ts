@@ -278,6 +278,16 @@ export class OMKREPL {
     const skillName = input.split(' ')[0].slice(1);
     const skillArgs = input.slice(input.indexOf(' ') + 1);
 
+    // Check if it's a tool command (file_system, web_fetch, etc.)
+    const toolCommands = ['read_file', 'write_file', 'list_directory', 'search_files', 
+                          'web_fetch', 'diagnostics', 'document_symbols', 'find_references',
+                          'execute_command', 'memory_read', 'memory_write'];
+    
+    if (toolCommands.includes(skillName)) {
+      await this.handleToolCommand(skillName, skillArgs);
+      return;
+    }
+
     // Load skill definition - try local, then global
     let skillPath = join(this.cwd, '.omk', 'skills', skillName, 'SKILL.md');
     let skillSource = 'local';
@@ -339,6 +349,55 @@ export class OMKREPL {
       this.state.currentSkill = null;
     }
 
+    this.rl.setPrompt(this.getPrompt());
+    this.rl.prompt();
+  }
+
+  private async handleToolCommand(toolName: string, argsStr: string): Promise<void> {
+    console.log(`\x1b[36m[Executing tool: ${toolName}]\x1b[0m`);
+    
+    try {
+      // Parse JSON arguments
+      let args: Record<string, any> = {};
+      if (argsStr.trim()) {
+        try {
+          args = JSON.parse(argsStr);
+        } catch {
+          // If not valid JSON, treat as single string argument
+          args = { path: argsStr.trim() };
+        }
+      }
+
+      // Map tool names
+      const toolMap: Record<string, string> = {
+        'read_file': '$read_file',
+        'write_file': '$write_file',
+        'list_directory': '$list_directory',
+        'search_files': '$search_files',
+        'web_fetch': '$web_fetch',
+        'diagnostics': '$diagnostics',
+        'document_symbols': '$document_symbols',
+        'find_references': '$find_references',
+        'execute_command': '$execute_command',
+        'memory_read': '$memory_read',
+        'memory_write': '$memory_write',
+      };
+
+      const toolFullName = toolMap[toolName] || `$${toolName}`;
+      
+      // Import and dispatch tool
+      const { getToolDispatcher } = await import('../tools/index.js');
+      const dispatcher = getToolDispatcher(this.cwd);
+      
+      const result = await dispatcher.dispatch(toolFullName, args);
+      
+      console.log('\x1b[32m[Result]\x1b[0m');
+      console.log(JSON.stringify(result, null, 2));
+      
+    } catch (err) {
+      console.error('\x1b[31m[Tool Error]:', err instanceof Error ? err.message : String(err), '\x1b[0m');
+    }
+    
     this.rl.setPrompt(this.getPrompt());
     this.rl.prompt();
   }
