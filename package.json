@@ -1,0 +1,66 @@
+{
+  "name": "oh-my-kimi",
+  "version": "0.1.0",
+  "description": "Multi-agent orchestration CLI for Kimi AI - 36+ skills for autonomous development",
+  "type": "module",
+  "main": "dist/index.js",
+  "bin": {
+    "omk": "./bin/omk"
+  },
+  "files": [
+    "bin/",
+    "dist/",
+    "skills/",
+    "templates/",
+    "README.md",
+    "LICENSE"
+  ],
+  "scripts": {
+    "build": "tsc && node -e \"require('fs').chmodSync('dist/cli/omk.js', 0o755)\"",
+    "build:clean": "node -e \"const fs=require('fs'); fs.rmSync('dist',{recursive:true,force:true});\" && npm run build",
+    "dev": "tsc --watch",
+    "setup": "node dist/cli/omk.js setup",
+    "doctor": "node dist/cli/omk.js doctor",
+    "prepublishOnly": "npm run build:clean",
+    "postinstall": "node -e \"console.log('\\n🎉 Oh-my-KIMI installed! Run: omk setup\\n')\"",
+    "test": "node --test dist/**/*.test.js"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "keywords": [
+    "kimi",
+    "moonshot",
+    "cli",
+    "agents",
+    "orchestration",
+    "multi-agent",
+    "ai",
+    "development-tools",
+    "productivity",
+    "automation",
+    "code-review",
+    "team-collaboration",
+    "mcp",
+    "model-context-protocol"
+  ],
+  "author": "Oh-my-KIMI Team <omk@example.com>",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/yourusername/oh-my-kimi.git"
+  },
+  "bugs": {
+    "url": "https://github.com/yourusername/oh-my-kimi/issues"
+  },
+  "homepage": "https://github.com/yourusername/oh-my-kimi#readme",
+  "license": "MIT",
+  "preferGlobal": true,
+  "dependencies": {
+    "@iarna/toml": "^2.2.5",
+    "zod": "^4.3.6"
+  },
+  "devDependencies": {
+    "@types/node": "^25.5.0",
+    "typescript": "^5.7.0"
+  }
+}
