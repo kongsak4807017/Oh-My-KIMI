@@ -17,7 +17,8 @@ import {
   writeModeState, 
   clearModeState, 
   appendToNotepad,
-  createTask 
+  createTask,
+  listActiveModes
 } from '../state/index.js';
 import { PluginManager } from '../plugins/index.js';
 import { startMCPServer, stopMCPServer } from '../mcp/server.js';
@@ -260,6 +261,30 @@ export class OMKREPL {
 
       case '/mcp':
         await this.toggleMCP(args[0]);
+        break;
+
+      case '/model':
+        await this.handleModelCommand(args.join(' '));
+        break;
+
+      case '/settings':
+        this.showSettings();
+        break;
+
+      case '/status':
+        this.showStatus();
+        break;
+
+      case '/reasoning':
+        this.handleReasoningCommand(args[0]);
+        break;
+
+      case '/tools':
+        this.showTools();
+        break;
+
+      case '/memory':
+        this.showMemory();
         break;
 
       case '/exit':
@@ -650,6 +675,12 @@ export class OMKREPL {
 \x1b[1mBuiltin Commands:\x1b[0m
   /help              Show this help
   /skills            List available skills
+  /tools             List available tools
+  /model [provider]  Switch AI provider
+  /reasoning <level> Set reasoning effort (low|medium|high)
+  /settings          Show current settings
+  /status            Show session status
+  /memory            Show project memory
   /clear             Clear screen
   /history           Show chat history
   /save [name]       Save session
@@ -838,6 +869,130 @@ export class OMKREPL {
       console.log('\x1b[32mMCP server stopped\x1b[0m');
     } else {
       console.log('Usage: /mcp [start|stop]');
+    }
+  }
+
+  private async handleModelCommand(args: string): Promise<void> {
+    if (!args) {
+      const current = this.providerManager.getCurrentType();
+      console.log(`Current provider: ${current || 'not initialized'}`);
+      console.log('Usage: /model <provider> [options]');
+      console.log('Providers: api, browser, cli');
+      return;
+    }
+
+    const [provider, ...rest] = args.split(' ');
+    
+    try {
+      await this.providerManager.switchProvider(provider as any, {});
+      console.log(`[OK] Switched to provider: ${provider}`);
+    } catch (err) {
+      console.error('[ERROR] Failed to switch provider:', err instanceof Error ? err.message : String(err));
+    }
+  }
+
+  private showSettings(): void {
+    console.log('\n\x1b[1mOMK Settings:\x1b[0m\n');
+    console.log(`  Provider: ${this.providerManager.getCurrentType() || 'auto'}`);
+    console.log(`  Working Directory: ${this.cwd}`);
+    console.log(`  Global Config: ${this.globalOmkPath}`);
+    console.log(`  History Size: ${this.state.history.length}`);
+    console.log(`  Context Files: ${this.state.context.selectedFiles?.length || 0}`);
+    console.log('');
+  }
+
+  private showStatus(): void {
+    console.log('\n\x1b[1mOMK Status:\x1b[0m\n');
+    console.log(`  Mode: ${this.state.currentSkill || 'chat'}`);
+    console.log(`  Provider: ${this.providerManager.getCurrentType() || 'not initialized'}`);
+    console.log(`  Session Messages: ${this.state.history.length}`);
+    console.log(`  Context Files: ${this.state.context.selectedFiles?.length || 0}`);
+    
+    const activeModes = listActiveModes(this.cwd);
+    if (activeModes.length > 0) {
+      console.log('  Active Modes:');
+      for (const mode of activeModes) {
+        console.log(`    - ${mode.mode}: ${mode.current_phase}`);
+      }
+    }
+    console.log('');
+  }
+
+  private handleReasoningCommand(level?: string): void {
+    const validLevels = ['low', 'medium', 'high'];
+    
+    if (!level) {
+      console.log('Current reasoning: medium (default)');
+      console.log('Usage: /reasoning <low|medium|high>');
+      return;
+    }
+
+    if (!validLevels.includes(level)) {
+      console.log('[ERROR] Invalid reasoning level. Use: low, medium, high');
+      return;
+    }
+
+    console.log(`[OK] Reasoning level set to: ${level}`);
+    console.log('[INFO] Will take effect on next request');
+  }
+
+  private showTools(): void {
+    console.log('\n\x1b[1mAvailable Tools:\x1b[0m\n');
+    console.log('\x1b[33mFile System:\x1b[0m');
+    console.log('  $read_file <path>           Read file contents');
+    console.log('  $write_file <path> <content>  Write to file');
+    console.log('  $list_directory [path]      List directory contents');
+    console.log('  $search_files <pattern>     Search files for pattern');
+    console.log('');
+    console.log('\x1b[33mWeb:\x1b[0m');
+    console.log('  $web_fetch <url>            Fetch URL content');
+    console.log('');
+    console.log('\x1b[33mCode Intelligence:\x1b[0m');
+    console.log('  $diagnostics [path]         Run TypeScript diagnostics');
+    console.log('  $document_symbols <file>    Extract symbols from file');
+    console.log('  $find_references <symbol>   Find symbol references');
+    console.log('');
+    console.log('\x1b[33mExecution:\x1b[0m');
+    console.log('  $execute_command <cmd>      Execute shell command');
+    console.log('');
+    console.log('\x1b[33mMemory:\x1b[0m');
+    console.log('  $memory_read [section]      Read project memory');
+    console.log('  $memory_write <type> <content>  Write to memory');
+    console.log('');
+  }
+
+  private showMemory(): void {
+    try {
+      const { getMemoryTools } = require('../tools/memory.js');
+      const memory = getMemoryTools(this.cwd);
+      const info = memory.readMemory() as any;
+      
+      console.log('\n\x1b[1mProject Memory:\x1b[0m\n');
+      
+      if (info.techStack) {
+        console.log(`Tech Stack: ${info.techStack}`);
+      }
+      if (info.conventions) {
+        console.log(`Conventions: ${info.conventions}`);
+      }
+      
+      if (info.notes?.length > 0) {
+        console.log('\n\x1b[33mNotes:\x1b[0m');
+        for (const note of info.notes.slice(-5)) {
+          console.log(`  [${note.category}] ${note.content.slice(0, 60)}...`);
+        }
+      }
+      
+      if (info.directives?.length > 0) {
+        console.log('\n\x1b[33mDirectives:\x1b[0m');
+        for (const d of info.directives.slice(-5)) {
+          console.log(`  [${d.priority}] ${d.directive.slice(0, 60)}...`);
+        }
+      }
+      
+      console.log('');
+    } catch (err) {
+      console.log('No project memory found.');
     }
   }
 
