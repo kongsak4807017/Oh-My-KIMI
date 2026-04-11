@@ -1,5 +1,5 @@
-fix: add yolo flag to prevent interactive prompts in Kimi CLI
+fix: wait for process exit before yielding output
 
-- Add --yolo flag to both chat and stream methods
-- Prevents Kimi CLI from asking interactive questions
-- Fixes errors with complex/long prompts that trigger confirmations
+- Replace polling loop with Promise-based exit waiting
+- Fix issue where output was lost when Kimi CLI exited quickly
+- Ensure all output is captured before yielding

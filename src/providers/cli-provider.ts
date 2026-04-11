@@ -199,29 +199,24 @@ export class CLIProvider implements Provider {
       }
     });
 
-    // Yield chunks as they arrive
-    let checks = 0;
-    const maxChecks = 1200; // 120 seconds timeout (kimi can be slow)
-    
-    while (child.exitCode === null && checks < maxChecks) {
-      if (buffer.length > 0) {
-        const chunk = buffer;
-        buffer = '';
-        yield { content: chunk, done: false };
-      }
-      await new Promise(r => setTimeout(r, 100));
-      checks++;
-    }
+    // Wait for process to complete
+    await new Promise<void>((resolve, reject) => {
+      child.on('exit', (code) => {
+        resolve();
+      });
+      child.on('error', (err) => {
+        reject(err);
+      });
+      // Timeout after 120 seconds
+      setTimeout(() => {
+        child.kill();
+        reject(new Error('Request timed out'));
+      }, 120000);
+    });
 
-    // Final buffer
+    // Yield all output
     if (buffer.length > 0) {
       yield { content: buffer, done: false };
-    }
-
-    // Check if timed out
-    if (checks >= maxChecks && child.exitCode === null) {
-      child.kill();
-      yield { content: '\n[Error: Request timed out]', done: false };
     }
 
     yield { content: '', done: true };
