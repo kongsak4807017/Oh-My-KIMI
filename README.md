@@ -33,9 +33,17 @@ Inspired by [oh-my-codex](https://github.com/Yeachan-Heo/oh-my-codex), OMK bring
 
 ### Global Installation (Recommended)
 
+#### From npm Registry
 ```bash
 npm install -g oh-my-kimi
 ```
+
+#### From GitHub (Latest Development Version)
+```bash
+npm install -g github:kongsak4807017/oh-my-kimi
+```
+
+> **Note:** Installing from GitHub always gets the latest version from the main branch, while npm may have a slightly older stable release.
 
 ### Local Development
 
@@ -53,8 +61,11 @@ npm link
 <summary><b>🪟 Windows</b></summary>
 
 ```powershell
-# Install globally
+# Install from npm
 npm install -g oh-my-kimi
+
+# Or install from GitHub (latest version)
+npm install -g github:kongsak4807017/oh-my-kimi
 
 # Set API key (PowerShell)
 $env:KIMI_API_KEY="your_api_key_here"
@@ -80,8 +91,11 @@ omk --version
 # Install Node.js if needed
 brew install node
 
-# Install OMK
+# Install OMK from npm
 npm install -g oh-my-kimi
+
+# Or install from GitHub (latest version)
+npm install -g github:kongsak4807017/oh-my-kimi
 
 # Optional: Install tmux for team mode
 brew install tmux
@@ -100,8 +114,11 @@ source ~/.zshrc
 curl -fsSL https://deb.nodesource.com/setup_20.x | sudo -E bash -
 sudo apt-get install -y nodejs
 
-# Install OMK
+# Install OMK from npm
 npm install -g oh-my-kimi
+
+# Or install from GitHub (latest version)
+npm install -g github:kongsak4807017/oh-my-kimi
 
 # Optional: Install tmux for team mode
 sudo apt install tmux
