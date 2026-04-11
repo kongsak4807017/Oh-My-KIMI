@@ -6,7 +6,7 @@
 import { createInterface, Interface as ReadlineInterface } from 'readline';
 import { stdin, stdout } from 'process';
 import { existsSync, readFileSync } from 'fs';
-import { join } from 'path';
+import { join, resolve } from 'path';
 import { homedir } from 'os';
 import { 
   ProviderManager, 
@@ -192,6 +192,11 @@ export class OMKREPL {
       if (input.startsWith('$')) {
         await this.handleSkill(input);
         return;
+      }
+
+      // Check for file mention (@filename)
+      if (input.includes('@')) {
+        input = await this.handleFileMentions(input);
       }
 
       // Regular chat with Kimi
@@ -651,6 +656,49 @@ export class OMKREPL {
     }
   }
   
+  private async handleFileMentions(input: string): Promise<string> {
+    // Find @filename patterns
+    const mentionRegex = /@([\w./-]+)/g;
+    let match;
+    let processedInput = input;
+    
+    while ((match = mentionRegex.exec(input)) !== null) {
+      const fileName = match[1];
+      const fullPath = resolve(this.cwd, fileName);
+      
+      if (existsSync(fullPath)) {
+        // Add to context
+        if (!this.state.context.selectedFiles) {
+          this.state.context.selectedFiles = [];
+        }
+        
+        if (!this.state.context.selectedFiles.includes(fileName)) {
+          this.state.context.selectedFiles.push(fileName);
+          console.log(`\x1b[90m[Added to context: ${fileName}]\x1b[0m`);
+        }
+        
+        // Read file content for inline display
+        try {
+          const { getFileSystemTools } = await import('../tools/file-system.js');
+          const tools = getFileSystemTools(this.cwd);
+          const result = tools.readFile({ path: fileName, limit: 1000 });
+          
+          // Replace @filename with actual content reference
+          const fileContent = `\n\n--- Content of ${fileName} ---\n${result.content}\n--- End of ${fileName} ---\n`;
+          processedInput = processedInput.replace(match[0], fileContent);
+        } catch {
+          // If can't read, just keep the mention
+          processedInput = processedInput.replace(match[0], `[File: ${fileName}]`);
+        }
+      } else {
+        console.log(`\x1b[33m[File not found: ${fileName}]\x1b[0m`);
+        processedInput = processedInput.replace(match[0], `[File not found: ${fileName}]`);
+      }
+    }
+    
+    return processedInput;
+  }
+
   private detectTaskType(input: string): string {
     const lower = input.toLowerCase();
     if (lower.includes('http') || lower.includes('github') || lower.includes('clone')) {
