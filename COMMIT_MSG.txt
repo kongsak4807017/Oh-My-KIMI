@@ -1,5 +1,5 @@
-fix: detect Thai/Unicode and suggest alternative modes
+fix: add Windows UTF-8 encoding support for Thai characters
 
-- Add detection for non-ASCII characters in CLI provider
-- Show helpful error when Thai/Unicode detected on Windows
-- Suggest using --browser or --api mode instead
+- Set PYTHONIOENCODING=utf-8 and CHCP=65001 on Windows
+- Pass custom env to spawn for both chat and stream methods
+- Fixes 'charmap' codec errors with Thai/Unicode text

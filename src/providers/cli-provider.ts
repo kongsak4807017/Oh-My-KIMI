@@ -72,9 +72,14 @@ export class CLIProvider implements Provider {
         args.push('--thinking');
       }
       
+      // Fix Windows UTF-8 encoding
+      const isWindows = process.platform === 'win32';
+      const env = isWindows ? { ...process.env, PYTHONIOENCODING: 'utf-8', CHCP: '65001' } : process.env;
+      
       const child = spawn(this.config.cliPath ?? 'kimi', args, {
         stdio: ['pipe', 'pipe', 'pipe'],
         shell: true,
+        env,
       });
       
       let output = '';
@@ -124,14 +129,14 @@ export class CLIProvider implements Provider {
       return;
     }
 
-    // Check for non-ASCII characters (Thai, etc.)
-    // Kimi CLI on Windows has encoding issues with Unicode
-    if (/[^\x00-\x7F]/.test(content)) {
-      yield { content: '[ERROR] Kimi CLI on Windows does not support Thai/Unicode characters.\n', done: false };
-      yield { content: '[HINT] Use browser mode instead: omk --browser\n', done: false };
-      yield { content: '[HINT] Or use API mode: omk --api (requires KIMI_API_KEY)\n', done: false };
-      yield { content: '', done: true };
-      return;
+    // Fix Windows UTF-8 encoding by setting console code page
+    const isWindows = process.platform === 'win32';
+    const env = { ...process.env };
+    
+    if (isWindows) {
+      // Force UTF-8 encoding for Python/Kimi CLI
+      env.PYTHONIOENCODING = 'utf-8';
+      env.CHCP = '65001';  // UTF-8 code page
     }
 
     // Kimi CLI v1.24+ syntax: kimi --print --final-message-only -p "prompt"
@@ -144,10 +149,17 @@ export class CLIProvider implements Provider {
 
     const cliPath = this.config.cliPath ?? 'kimi';
     
-    const child = spawn(cliPath, args, {
+    // Spawn with UTF-8 environment on Windows
+    const spawnOptions: any = {
       stdio: ['pipe', 'pipe', 'pipe'],
       shell: true,
-    });
+    };
+    
+    if (isWindows) {
+      spawnOptions.env = env;
+    }
+    
+    const child = spawn(cliPath, args, spawnOptions);
 
     let buffer = '';
     let hasError = false;
