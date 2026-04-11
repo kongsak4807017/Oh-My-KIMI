@@ -422,3 +422,193 @@ ${content.touchpoints.map(t => `- ${t}`).join('\\n')}
   writeFileSync(filepath, markdown);
   return filepath;
 }
+
+
+// Session management
+const SESSIONS_DIR = 'sessions';
+
+export interface SessionInfo {
+  id: string;
+  title?: string;
+  cwd: string;
+  created_at: string;
+  updated_at: string;
+  message_count: number;
+  first_message?: string;
+  last_message?: string;
+}
+
+/**
+ * Get sessions directory path
+ */
+function getSessionsPath(cwd: string = process.cwd()): string {
+  const effectiveOmkPath = getEffectiveOmkPath(cwd);
+  return join(effectiveOmkPath, SESSIONS_DIR);
+}
+
+/**
+ * Ensure sessions directory exists
+ */
+function ensureSessionsDir(cwd: string = process.cwd()): string {
+  const sessionsPath = getSessionsPath(cwd);
+  if (!existsSync(sessionsPath)) {
+    mkdirSync(sessionsPath, { recursive: true });
+  }
+  return sessionsPath;
+}
+
+/**
+ * List all sessions
+ */
+export function listSessions(cwd: string = process.cwd()): SessionInfo[] {
+  const sessionsPath = getSessionsPath(cwd);
+  
+  if (!existsSync(sessionsPath)) {
+    return [];
+  }
+  
+  const sessions: SessionInfo[] = [];
+  const files = readdirSync(sessionsPath);
+  
+  for (const file of files) {
+    if (file.endsWith('.json')) {
+      try {
+        const content = readFileSync(join(sessionsPath, file), 'utf-8');
+        const session = JSON.parse(content) as SessionInfo;
+        sessions.push(session);
+      } catch {
+        // Skip invalid files
+      }
+    }
+  }
+  
+  // Sort by updated_at desc
+  return sessions.sort((a, b) => 
+    new Date(b.updated_at).getTime() - new Date(a.updated_at).getTime()
+  );
+}
+
+/**
+ * Save session metadata
+ */
+export function saveSession(
+  session: Omit<SessionInfo, 'id' | 'created_at' | 'updated_at'>,
+  cwd: string = process.cwd()
+): SessionInfo {
+  const sessionsPath = ensureSessionsDir(cwd);
+  
+  const id = `session-${Date.now()}`;
+  const now = new Date().toISOString();
+  
+  const fullSession: SessionInfo = {
+    ...session,
+    id,
+    created_at: now,
+    updated_at: now,
+  };
+  
+  writeFileSync(
+    join(sessionsPath, `${id}.json`),
+    JSON.stringify(fullSession, null, 2)
+  );
+  
+  return fullSession;
+}
+
+/**
+ * Update session
+ */
+export function updateSession(
+  id: string,
+  updates: Partial<SessionInfo>,
+  cwd: string = process.cwd()
+): SessionInfo | null {
+  const sessionsPath = getSessionsPath(cwd);
+  const sessionFile = join(sessionsPath, `${id}.json`);
+  
+  if (!existsSync(sessionFile)) {
+    return null;
+  }
+  
+  try {
+    const existing = JSON.parse(readFileSync(sessionFile, 'utf-8')) as SessionInfo;
+    const updated: SessionInfo = {
+      ...existing,
+      ...updates,
+      updated_at: new Date().toISOString(),
+    };
+    
+    writeFileSync(sessionFile, JSON.stringify(updated, null, 2));
+    return updated;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Delete session
+ */
+export function deleteSession(id: string, cwd: string = process.cwd()): boolean {
+  const sessionsPath = getSessionsPath(cwd);
+  const sessionFile = join(sessionsPath, `${id}.json`);
+  
+  if (!existsSync(sessionFile)) {
+    return false;
+  }
+  
+  try {
+    rmSync(sessionFile);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Get session by ID
+ */
+export function getSession(id: string, cwd: string = process.cwd()): SessionInfo | null {
+  const sessionsPath = getSessionsPath(cwd);
+  const sessionFile = join(sessionsPath, `${id}.json`);
+  
+  if (!existsSync(sessionFile)) {
+    return null;
+  }
+  
+  try {
+    return JSON.parse(readFileSync(sessionFile, 'utf-8')) as SessionInfo;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Format relative time
+ */
+export function formatRelativeTime(date: string): string {
+  const now = new Date();
+  const then = new Date(date);
+  const diffMs = now.getTime() - then.getTime();
+  const diffMins = Math.floor(diffMs / 60000);
+  const diffHours = Math.floor(diffMs / 3600000);
+  const diffDays = Math.floor(diffMs / 86400000);
+  
+  if (diffMins < 1) return 'just now';
+  if (diffMins < 60) return `${diffMins}m ago`;
+  if (diffHours < 24) return `${diffHours}h ago`;
+  if (diffDays === 1) return 'yesterday';
+  return `${diffDays}d ago`;
+}
+
+/**
+ * Generate session title from first message
+ */
+export function generateSessionTitle(message: string): string {
+  // Truncate to 50 chars, remove special chars
+  const clean = message
+    .replace(/[\n\r]/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim()
+    .slice(0, 50);
+  return clean || 'New session';
+}

@@ -166,10 +166,25 @@ export class ActivityLogger {
     const icon = this.spinnerFrames[this.spinnerIndex];
     const color = this.getColor(latest.type, latest.status);
     const reset = '\x1b[0m';
+    const dim = '\x1b[2m';
+    
+    // Build detailed status message
+    let detail = '';
+    if (latest.type === 'thinking') {
+      detail = ' [Analyzing your request...]';
+    } else if (latest.type === 'reading') {
+      detail = latest.details ? ` [${latest.details}]` : ' [Reading file...]';
+    } else if (latest.type === 'writing') {
+      detail = latest.details ? ` [${latest.details}]` : ' [Writing file...]';
+    } else if (latest.type === 'command') {
+      detail = latest.details ? ` [Running: ${latest.details}]` : ' [Executing command...]';
+    } else if (latest.type === 'tool_call') {
+      detail = latest.toolName ? ` [Tool: ${latest.toolName}]` : ' [Calling tool...]';
+    }
     
     // Move cursor up and rewrite line
     this.clearLine();
-    process.stdout.write(`\r${color}${icon} ${latest.message}${reset}`);
+    process.stdout.write(`\r${color}${icon} ${latest.message}${dim}${detail}${reset}`);
   }
 
   private clearLine() {

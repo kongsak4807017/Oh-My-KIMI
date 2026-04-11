@@ -5,7 +5,7 @@
 
 import { createInterface, Interface as ReadlineInterface } from 'readline';
 import { stdin, stdout } from 'process';
-import { existsSync, readFileSync } from 'fs';
+import { existsSync, readFileSync, statSync } from 'fs';
 import { join, resolve, basename } from 'path';
 import { homedir } from 'os';
 import { 
@@ -18,10 +18,21 @@ import {
   clearModeState, 
   appendToNotepad,
   createTask,
-  listActiveModes
+  listActiveModes,
+  listSessions,
+  saveSession,
+  updateSession,
+  deleteSession,
+  getSession,
+  formatRelativeTime,
+  generateSessionTitle,
+  SessionInfo
 } from '../state/index.js';
 import { PluginManager } from '../plugins/index.js';
 import { startMCPServer, stopMCPServer } from '../mcp/server.js';
+import { getContextManager, ContextStats } from '../utils/context-manager.js';
+import { getCodebaseIndexer, getFileChunker, RepositoryMap } from '../indexer/index.js';
+import { InteractiveAutocomplete } from './autocomplete-prompt.js';
 
 // REPL State
 interface REPLState {
@@ -60,11 +71,18 @@ const BUILTIN_COMMANDS = [
   '/history',
   '/save',
   '/load',
+  '/sessions',
+  '/title',
   '/note',
   '/task',
   '/file',
   '/files',
   '/context',
+  '/tokens',
+  '/cache',
+  '/index',
+  '/map',
+  '/search',
   '/plugins',
   '/mcp',
   '/exit',
@@ -78,8 +96,17 @@ export class OMKREPL {
   private pluginManager: PluginManager;
   private isRunning: boolean = false;
   private globalOmkPath: string;
+  private contextManager = getContextManager();
+  private codebaseIndexer: ReturnType<typeof getCodebaseIndexer>;
+  private fileChunker = getFileChunker();
+  private repoMap: RepositoryMap | null = null;
+  private autocomplete: InteractiveAutocomplete;
+  private currentSessionId: string | null = null;
+  private sessionTitle: string | null = null;
 
   constructor(private cwd: string = process.cwd()) {
+    this.codebaseIndexer = getCodebaseIndexer(this.cwd);
+    this.autocomplete = new InteractiveAutocomplete(this.cwd);
     this.providerManager = getProviderManager();
     this.state = {
       history: [],
@@ -88,11 +115,6 @@ export class OMKREPL {
     };
     this.pluginManager = new PluginManager(cwd);
     this.globalOmkPath = join(homedir(), '.omk');
-    
-    // Enable keypress events
-    if (stdin.isTTY) {
-      stdin.setRawMode(true);
-    }
     
     this.rl = createInterface({
       input: stdin,
@@ -120,79 +142,89 @@ export class OMKREPL {
       this.shutdown();
     });
 
-    // Handle keypress for guides
-    process.stdin.on('keypress', (str, key) => {
-      if (key.name === 'return' || key.name === 'enter') return;
-      
-      const currentLine = this.rl.line || '';
-      
-      // Show guide for /
-      if (currentLine === '/' || currentLine === '') {
-        if (str === '/') {
-          console.log('\n\x1b[90mCommands: /help /tools /status /settings /exit\x1b[0m');
-          this.rl.prompt();
-        }
-      }
-      
-      // Show guide for $
-      if (currentLine === '$' || currentLine === '') {
-        if (str === '$') {
-          console.log('\n\x1b[90mTools: $read_file $write_file $web_fetch $diagnostics $execute_command\x1b[0m');
-          this.rl.prompt();
-        }
-      }
-      
-      // Show guide for @
-      if (currentLine.endsWith('@') || currentLine === '') {
-        if (str === '@') {
-          console.log('\n\x1b[90mType @filename to include file content\x1b[0m');
-          this.rl.prompt();
-        }
-      }
-    });
+    // Note: Interactive autocomplete handles all input now
 
     // Handle Ctrl+C gracefully
     process.on('SIGINT', () => {
       console.log('\nUse /exit or /quit to exit properly.');
-      this.rl.prompt();
+      // Input loop will continue
     });
   }
 
+  private currentHint: string = '';
+  private hintCleared: boolean = true;
+
+  private showGrayHint(prefix: string, line: string): void {
+    let hint = '';
+    
+    if (prefix === '/') {
+      hint = ' help  exit  tools  status';
+    } else if (prefix === '$') {
+      hint = ' read_file  write_file  web_fetch  diagnostics  execute_command';
+    } else if (prefix === '@') {
+      hint = ' filename';
+    }
+    
+    if (hint) {
+      this.currentHint = hint;
+      this.hintCleared = false;
+      const gray = '\x1b[90m';
+      const reset = '\x1b[0m';
+      // Save cursor position, move to end, print hint, restore cursor
+      process.stdout.write(`\x1b[s${gray}${hint}${reset}\x1b[u`);
+    }
+  }
+
+  private clearHint(): void {
+    if (this.hintCleared) return;
+    this.hintCleared = true;
+    // Clear from cursor to end of line
+    process.stdout.write('\x1b[K');
+  }
+
   private completer(line: string): [string[], string] {
+    // Empty or whitespace - show hints
+    if (!line.trim()) {
+      return [['/help', '/exit', '$tools', '@filename'], ''];
+    }
+    
     // Command mode (starts with /)
     if (line.startsWith('/')) {
-      const cmd = line.slice(1);
-      const matches = BUILTIN_COMMANDS.filter(c => c.startsWith('/' + cmd));
+      const matches = BUILTIN_COMMANDS.filter(c => c.startsWith(line));
+      // Return the part after '/' as substring to complete
       return [matches, line];
     }
     
     // Tool mode (starts with $)
     if (line.startsWith('$')) {
-      const tool = line.slice(1);
       const tools = [
         '$read_file', '$write_file', '$list_directory', '$search_files',
         '$web_fetch', '$diagnostics', '$document_symbols', '$find_references',
         '$execute_command', '$memory_read', '$memory_write',
+        '$ralph', '$team', '$plan', '$deep-interview', '$autopilot',
+        '$code-review', '$security-review', '$help',
       ];
-      const matches = tools.filter(t => t.startsWith('$' + tool));
+      const matches = tools.filter(t => t.startsWith(line));
       return [matches, line];
     }
     
     // File mention mode (starts with @)
     if (line.includes('@')) {
-      const afterAt = line.slice(line.lastIndexOf('@') + 1);
+      const atIndex = line.lastIndexOf('@');
+      const beforeAt = line.slice(0, atIndex);
+      const afterAt = line.slice(atIndex + 1);
+      
       try {
         const { getFileSystemTools } = require('../tools/file-system.js');
         const fsTools = getFileSystemTools(this.cwd);
         const { entries } = fsTools.listDirectory({ path: '.', recursive: true });
         const files = entries
-          .filter((e: any) => e.type === 'file')
-          .map((e: any) => '@' + e.name)
-          .filter((f: string) => f.startsWith('@' + afterAt))
+          .filter((e: any) => e.type === 'file' && e.name.includes(afterAt))
+          .map((e: any) => beforeAt + '@' + e.name)
           .slice(0, 20);
-        return [files, '@' + afterAt];
+        return [files.length ? files : [line], line];
       } catch {
-        return [[], line];
+        return [[line], line];
       }
     }
     
@@ -243,13 +275,26 @@ export class OMKREPL {
     }, this.cwd);
 
     this.isRunning = true;
-    this.rl.prompt();
+    
+    // Start autocomplete input loop
+    this.runInputLoop();
+  }
+
+  private async runInputLoop(): Promise<void> {
+    while (this.isRunning) {
+      try {
+        const input = await this.autocomplete.prompt();
+        await this.handleInput(input.trim());
+      } catch (err) {
+        console.error('Input error:', err);
+        break;
+      }
+    }
   }
 
   private async handleInput(input: string): Promise<void> {
     if (!input) {
-      this.rl.prompt();
-      return;
+      return; // Loop will prompt again
     }
 
     // Add to history
@@ -275,14 +320,40 @@ export class OMKREPL {
 
       // Regular chat with Kimi
       await this.handleChat(input);
+      
+      // Save/update session after chat
+      this.saveCurrentSession(input);
 
     } catch (err) {
       console.error('\x1b[31mError:', err instanceof Error ? err.message : err, '\x1b[0m');
     }
+    // Loop will prompt again
+  }
 
-    if (this.isRunning) {
-      this.rl.setPrompt(this.getPrompt());
-      this.rl.prompt();
+  private saveCurrentSession(lastMessage: string): void {
+    // Auto-generate title from first message if not set
+    if (!this.sessionTitle && this.state.history.length > 0) {
+      const firstUserMsg = this.state.history.find(m => m.role === 'user')?.content;
+      if (firstUserMsg) {
+        this.sessionTitle = generateSessionTitle(firstUserMsg);
+      }
+    }
+    
+    const sessionData = {
+      title: this.sessionTitle || undefined,
+      cwd: this.cwd,
+      message_count: this.state.history.length,
+      first_message: this.state.history.find(m => m.role === 'user')?.content,
+      last_message: lastMessage,
+    };
+    
+    if (this.currentSessionId) {
+      // Update existing session
+      updateSession(this.currentSessionId, sessionData, this.cwd);
+    } else {
+      // Create new session
+      const session = saveSession(sessionData, this.cwd);
+      this.currentSessionId = session.id;
     }
   }
 
@@ -334,6 +405,34 @@ export class OMKREPL {
         this.showContext();
         break;
 
+      case '/tokens':
+        this.showTokenStats();
+        break;
+
+      case '/cache':
+        this.showCacheStats();
+        break;
+
+      case '/index':
+        await this.buildCodebaseIndex();
+        break;
+
+      case '/map':
+        this.showRepositoryMap();
+        break;
+
+      case '/search':
+        this.searchSymbols(args.join(' '));
+        break;
+
+      case '/sessions':
+        await this.handleSessions();
+        break;
+
+      case '/title':
+        this.handleTitle(args.join(' '));
+        break;
+
       case '/plugins':
         this.showPlugins();
         break;
@@ -374,8 +473,7 @@ export class OMKREPL {
       default:
         console.log(`Unknown command: ${command}. Type /help for available commands.`);
     }
-
-    this.rl.prompt();
+    // Input loop will prompt again
   }
 
   private async handleSkill(input: string): Promise<void> {
@@ -404,7 +502,6 @@ export class OMKREPL {
     if (!existsSync(skillPath)) {
       console.log(`\x1b[33mSkill not found: ${skillName}\x1b[0m`);
       console.log('Available skills: try /skills to list available skills');
-      this.rl.prompt();
       return;
     }
 
@@ -436,10 +533,18 @@ export class OMKREPL {
     // Execute skill
     try {
       const provider = this.providerManager.getProvider();
+      
+      // Optimize context for skill execution
+      const { messages: optimizedMessages } = this.contextManager.getOptimizedContext(
+        this.state.history,
+        undefined,
+        skillArgs
+      );
+      
       const response = await provider.chat({
         messages: [
           systemMessage,
-          ...this.state.history.slice(-5),
+          ...optimizedMessages,
         ],
       });
 
@@ -452,9 +557,6 @@ export class OMKREPL {
       console.error('\x1b[31mSkill execution failed:', err, '\x1b[0m');
       this.state.currentSkill = null;
     }
-
-    this.rl.setPrompt(this.getPrompt());
-    this.rl.prompt();
   }
 
   private async handleToolCommand(toolName: string, argsStr: string): Promise<void> {
@@ -520,9 +622,6 @@ export class OMKREPL {
         details: err instanceof Error ? err.message : String(err),
       });
     }
-    
-    this.rl.setPrompt(this.getPrompt());
-    this.rl.prompt();
   }
 
   private async handleChat(input: string): Promise<void> {
@@ -649,6 +748,18 @@ export class OMKREPL {
         }
       }
     }
+    
+    // For large codebases, use indexer to find relevant files
+    const stats = this.codebaseIndexer.getStats();
+    if (stats.files > 0) {
+      const relevantFiles = this.codebaseIndexer.getSmartContext(input, 15);
+      if (relevantFiles.length > 0) {
+        systemPrompt += '\n\nAutomatically selected relevant files:\n';
+        for (const file of relevantFiles) {
+          systemPrompt += `\n--- ${file.path} ---\n${file.content.slice(0, 1500)}\n`;
+        }
+      }
+    }
 
     // Import activity logger
     const { getActivityLogger } = await import('./activity-logger.js');
@@ -674,10 +785,37 @@ export class OMKREPL {
       const streamTimeout = 10 * 60 * 1000;
       const startTime = Date.now();
       
+      // Optimize context with token management
+      const { messages: optimizedMessages, stats, cached } = this.contextManager.getOptimizedContext(
+        this.state.history,
+        this.state.context.selectedFiles,
+        input
+      );
+      
+      // If cache hit, use cached response
+      if (cached) {
+        logger.addActivity({
+          type: 'complete',
+          message: 'Cache hit - using cached response',
+          status: 'completed',
+        });
+        console.log('\n' + cached + '\n');
+        return;
+      }
+      
+      // Log token stats if compressed
+      if (stats.compressed) {
+        logger.addActivity({
+          type: 'action',
+          message: `Context compressed: ${stats.totalTokens.toLocaleString()} tokens`,
+          status: 'completed',
+        });
+      }
+      
       for await (const chunk of provider.stream({
         messages: [
           { role: 'system', content: systemPrompt },
-          ...this.state.history.slice(-10),
+          ...optimizedMessages,
         ],
       })) {
         // Check timeout
@@ -716,6 +854,10 @@ export class OMKREPL {
       
       console.log('\n');
       this.state.history.push({ role: 'assistant', content: fullResponse });
+      
+      // Store in cache for future similar queries
+      const responseTokens = this.contextManager.estimateTokens(fullResponse);
+      this.contextManager.storeCache(input, fullResponse, responseTokens);
 
     } catch (err) {
       const errorMsg = err instanceof Error ? err.message : String(err);
@@ -741,6 +883,15 @@ export class OMKREPL {
       const fullPath = resolve(this.cwd, fileName);
       
       if (existsSync(fullPath)) {
+        const stats = statSync(fullPath);
+        
+        // Skip directories
+        if (stats.isDirectory()) {
+          console.log(`\x1b[33m[Skipping directory: ${fileName}]\x1b[0m`);
+          processedInput = processedInput.replace(match[0], `[Directory: ${fileName}]`);
+          continue;
+        }
+        
         // Add to context
         if (!this.state.context.selectedFiles) {
           this.state.context.selectedFiles = [];
@@ -807,11 +958,18 @@ export class OMKREPL {
   /history           Show chat history
   /save [name]       Save session
   /load [name]       Load session
+  /sessions          List all saved sessions
+  /title [text]      Set session title
   /note <text>       Add to notepad
   /task <title>      Create a task
   /file <path>       Add file to context
   /files             Show context files
   /context           Show full context
+  /tokens            Show token usage stats
+  /cache             Show cache statistics
+  /index             Build codebase index (for large projects)
+  /map               Show repository overview
+  /search <symbol>   Search symbols in codebase
   /plugins           List loaded plugins
   /mcp [start|stop]  Toggle MCP server
   /exit, /quit       Exit OMK
@@ -965,6 +1123,142 @@ export class OMKREPL {
     this.showContextFiles();
   }
 
+  private async handleSessions(): Promise<void> {
+    const sessions = listSessions(this.cwd);
+    
+    if (sessions.length === 0) {
+      console.log('\n\x1b[33mNo saved sessions found.\x1b[0m');
+      console.log('Sessions are saved automatically when you chat.\n');
+      return;
+    }
+    
+    console.log('\n\x1b[1m💬 Saved Sessions:\x1b[0m\n');
+    
+    for (let i = 0; i < sessions.length; i++) {
+      const session = sessions[i];
+      const isCurrent = session.id === this.currentSessionId;
+      const marker = isCurrent ? '\x1b[36m→ ' : '  ';
+      const title = session.title || generateSessionTitle(session.first_message || 'New session');
+      const time = formatRelativeTime(session.updated_at);
+      const messages = session.message_count || 0;
+      
+      console.log(`${marker}${i + 1}. ${title}\x1b[0m`);
+      console.log(`     \x1b[90m${time} · ${messages} msgs · ${session.id.slice(0, 8)}\x1b[0m`);
+      
+      if (isCurrent) {
+        console.log(`     \x1b[36m[current session]\x1b[0m`);
+      }
+      console.log();
+    }
+    
+    console.log('\x1b[90mUse /load <name> to restore a session\x1b[0m\n');
+  }
+
+  private handleTitle(title?: string): void {
+    if (!title) {
+      // Show current title
+      if (this.sessionTitle) {
+        console.log(`\n\x1b[1mCurrent session title:\x1b[0m ${this.sessionTitle}\n`);
+      } else if (this.currentSessionId) {
+        console.log(`\n\x1b[1mCurrent session:\x1b[0m ${this.currentSessionId.slice(0, 8)}... (no title)\n`);
+        console.log('\x1b[90mUse /title <text> to set a title\x1b[0m\n');
+      } else {
+        console.log('\n\x1b[33mNo active session. Start chatting to create one.\x1b[0m\n');
+      }
+      return;
+    }
+    
+    // Set title
+    this.sessionTitle = title.slice(0, 200); // Max 200 chars
+    
+    if (this.currentSessionId) {
+      updateSession(this.currentSessionId, { title: this.sessionTitle }, this.cwd);
+    }
+    
+    console.log(`\n\x1b[32m[OK] Session title set to: "${this.sessionTitle}"\x1b[0m\n`);
+  }
+
+  private async buildCodebaseIndex(): Promise<void> {
+    console.log('\n\x1b[36m[Building codebase index...]\x1b[0m');
+    console.log('This may take a while for large projects...\n');
+    
+    try {
+      this.repoMap = await this.codebaseIndexer.buildIndex((current, total, file) => {
+        if (current % 100 === 0 || current === total) {
+          process.stdout.write(`\r  Indexed: ${current}/${total} files`);
+        }
+      });
+      
+      console.log(`\n\n\x1b[32m[OK] Index built successfully!\x1b[0m`);
+      this.displayRepositoryMap(this.repoMap);
+    } catch (err) {
+      console.error('\x1b[31m[ERROR] Failed to build index:', err, '\x1b[0m');
+    }
+  }
+
+  private displayRepositoryMap(map: RepositoryMap): void {
+    console.log('\n\x1b[1m📊 Repository Overview:\x1b[0m');
+    console.log(`  Files: ${map.totalFiles.toLocaleString()}`);
+    console.log(`  Lines: ${map.totalLines.toLocaleString()}`);
+    console.log(`  Symbols: ${map.totalSymbols.toLocaleString()}`);
+    
+    console.log('\n\x1b[1mLanguages:\x1b[0m');
+    for (const [lang, stats] of Object.entries(map.languages).slice(0, 5)) {
+      console.log(`  ${lang}: ${stats.percentage}% (${stats.files} files, ${stats.lines.toLocaleString()} lines)`);
+    }
+    
+    if (map.modules.length > 0) {
+      console.log('\n\x1b[1mTop Modules:\x1b[0m');
+      for (const mod of map.modules.slice(0, 5)) {
+        console.log(`  ${mod.name}: ${mod.files} files, ${mod.lines.toLocaleString()} lines`);
+      }
+    }
+    
+    if (map.keyFiles.length > 0) {
+      console.log('\n\x1b[1mKey Files (most imported):\x1b[0m');
+      for (const file of map.keyFiles.slice(0, 5)) {
+        console.log(`  - ${file}`);
+      }
+    }
+  }
+
+  private showRepositoryMap(): void {
+    if (!this.repoMap) {
+      console.log('No index available. Run /index first.');
+      return;
+    }
+    this.displayRepositoryMap(this.repoMap);
+  }
+
+  private searchSymbols(query: string): void {
+    if (!query) {
+      console.log('Usage: /search <symbol-name>');
+      return;
+    }
+    
+    const stats = this.codebaseIndexer.getStats();
+    if (stats.files === 0) {
+      console.log('No index available. Run /index first.');
+      return;
+    }
+    
+    // Simple symbol search through smart context
+    const results = this.codebaseIndexer.getSmartContext(query, 10);
+    
+    if (results.length === 0) {
+      console.log(`No results found for "${query}"`);
+      return;
+    }
+    
+    console.log(`\n\x1b[1mSearch results for "${query}":\x1b[0m\n`);
+    for (const result of results) {
+      console.log(`  \x1b[33m${result.path}\x1b[0m (relevance: ${result.relevance})`);
+      // Show first few lines
+      const preview = result.content.split('\n').slice(0, 5).join('\n  ');
+      console.log(`  ${preview}\n`);
+    }
+  }
+
   private showPlugins(): void {
     const plugins = this.pluginManager.listPlugins();
     
@@ -1116,6 +1410,24 @@ export class OMKREPL {
     } catch (err) {
       console.log('No project memory found.');
     }
+  }
+
+  private showTokenStats(): void {
+    const stats = this.contextManager.getStats(
+      this.state.history,
+      this.state.context.selectedFiles
+    );
+    console.log('\n' + this.contextManager.formatStats(stats));
+    console.log('\n\x1b[90mTip: Context auto-compresses when >80K tokens\x1b[0m\n');
+  }
+
+  private showCacheStats(): void {
+    const cacheStats = this.contextManager.getCacheStats();
+    console.log('\n\x1b[1mSemantic Cache:\x1b[0m\n');
+    console.log(`  Cached queries: ${cacheStats.size}`);
+    console.log(`  Hit rate: ${cacheStats.hitRate}%`);
+    console.log(`  Tokens saved: ${cacheStats.savedTokens.toLocaleString()}`);
+    console.log('\n\x1b[90mSimilar queries reuse cached responses\x1b[0m\n');
   }
 
   private shutdown(): void {
