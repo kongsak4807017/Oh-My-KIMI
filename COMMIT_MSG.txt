@@ -1,6 +1,7 @@
-fix: disable TUI on Windows, use classic REPL instead
+feat: add real-time activity logging and extend timeout
 
-- Ink TUI requires raw mode which Windows CMD does not support
-- Disable TUI on Windows platform (process.platform !== win32)
-- Add yolo option to REPL for consistency
-- Show YOLO warning in REPL mode
+- Add ActivityLogger with spinner animations and progress tracking
+- Show real-time activities: thinking, reading, writing, commands
+- Extend CLI timeout from 60s to 10 minutes for complex tasks
+- Log chunk progress every 50 chunks
+- Detect task type from input (repository, debugging, planning, etc.)

@@ -368,11 +368,30 @@ export class OMKREPL {
       }
     }
 
+    // Import activity logger
+    const { getActivityLogger } = await import('./activity-logger.js');
+    const logger = getActivityLogger();
+    logger.start();
+    
+    // Detect task type from input
+    const taskType = this.detectTaskType(input);
+    
+    // Log initial activity
+    logger.addActivity({
+      type: 'thinking',
+      message: `Processing: ${input.slice(0, 50)}...`,
+      status: 'running',
+    });
+
     try {
-      console.log('[THINKING...]');
-      
       const provider = this.providerManager.getProvider();
       let fullResponse = '';
+      let chunkCount = 0;
+      let lastUpdate = Date.now();
+      
+      // Create streaming timeout (10 minutes for complex tasks)
+      const streamTimeout = 10 * 60 * 1000;
+      const startTime = Date.now();
       
       for await (const chunk of provider.stream({
         messages: [
@@ -380,17 +399,71 @@ export class OMKREPL {
           ...this.state.history.slice(-10),
         ],
       })) {
+        // Check timeout
+        if (Date.now() - startTime > streamTimeout) {
+          logger.addActivity({
+            type: 'error',
+            message: 'Request timed out (10 minutes)',
+            status: 'failed',
+          });
+          break;
+        }
+        
+        // Write chunk immediately
         process.stdout.write(chunk.content);
         fullResponse += chunk.content;
+        chunkCount++;
+        
+        // Log progress every 50 chunks
+        if (chunkCount % 50 === 0) {
+          logger.addActivity({
+            type: 'action',
+            message: `Received ${chunkCount} chunks (${fullResponse.length} chars)`,
+            status: 'completed',
+          });
+        }
+        
         if (chunk.done) break;
       }
 
+      // Log completion
+      logger.addActivity({
+        type: 'complete',
+        message: `Response complete (${fullResponse.length} chars, ${chunkCount} chunks)`,
+        status: 'completed',
+      });
+      
       console.log('\n');
       this.state.history.push({ role: 'assistant', content: fullResponse });
 
     } catch (err) {
-      console.error('[ERROR] Chat failed:', err instanceof Error ? err.message : String(err));
+      const errorMsg = err instanceof Error ? err.message : String(err);
+      logger.addActivity({
+        type: 'error',
+        message: `Failed: ${errorMsg}`,
+        status: 'failed',
+      });
+      console.error('\n[ERROR] Chat failed:', errorMsg);
+    } finally {
+      logger.stop();
     }
+  }
+  
+  private detectTaskType(input: string): string {
+    const lower = input.toLowerCase();
+    if (lower.includes('http') || lower.includes('github') || lower.includes('clone')) {
+      return 'repository-analysis';
+    }
+    if (lower.includes('fix') || lower.includes('bug') || lower.includes('error')) {
+      return 'debugging';
+    }
+    if (lower.includes('plan') || lower.includes('phase') || lower.includes('progression')) {
+      return 'planning';
+    }
+    if (lower.includes('refactor') || lower.includes('rewrite')) {
+      return 'refactoring';
+    }
+    return 'general-chat';
   }
 
   private showHelp(): void {

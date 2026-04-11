@@ -19,7 +19,7 @@ export class CLIProvider implements Provider {
   private config: ProviderConfig = {
     type: 'cli',
     cliPath: 'kimi',
-    timeout: 60000,
+    timeout: 600000, // 10 minutes for complex tasks
   };
 
   async initialize(config: ProviderConfig): Promise<void> {
