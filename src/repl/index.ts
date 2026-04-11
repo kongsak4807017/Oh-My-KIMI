@@ -6,7 +6,7 @@
 import { createInterface, Interface as ReadlineInterface } from 'readline';
 import { stdin, stdout } from 'process';
 import { existsSync, readFileSync } from 'fs';
-import { join, resolve } from 'path';
+import { join, resolve, basename } from 'path';
 import { homedir } from 'os';
 import { 
   ProviderManager, 
@@ -203,6 +203,10 @@ export class OMKREPL {
   }
 
   async start(options?: { provider?: string; reasoning?: string; yolo?: boolean }): Promise<void> {
+    // Set terminal title to project name
+    const projectName = basename(this.cwd);
+    process.stdout.write(`\x1b]0;OMK: ${projectName}\x07`);
+    
     if (options?.yolo) {
       console.log('\n[WARNING] YOLO mode enabled - bypassing confirmations');
     }
@@ -1115,6 +1119,9 @@ export class OMKREPL {
   }
 
   private shutdown(): void {
+    // Reset terminal title
+    process.stdout.write('\x1b]0;\x07');
+    
     console.log('\n\x1b[32mGoodbye! 👋\x1b[0m\n');
     
     this.isRunning = false;
