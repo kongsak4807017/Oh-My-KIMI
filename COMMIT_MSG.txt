@@ -1,5 +1,5 @@
-fix: add Windows UTF-8 encoding support for Thai characters
+fix: add yolo flag to prevent interactive prompts in Kimi CLI
 
-- Set PYTHONIOENCODING=utf-8 and CHCP=65001 on Windows
-- Pass custom env to spawn for both chat and stream methods
-- Fixes 'charmap' codec errors with Thai/Unicode text
+- Add --yolo flag to both chat and stream methods
+- Prevents Kimi CLI from asking interactive questions
+- Fixes errors with complex/long prompts that trigger confirmations

@@ -72,6 +72,9 @@ export class CLIProvider implements Provider {
         args.push('--thinking');
       }
       
+      // Add yolo mode to prevent interactive prompts
+      args.push('--yolo');
+      
       // Fix Windows UTF-8 encoding
       const isWindows = process.platform === 'win32';
       const env = isWindows ? { ...process.env, PYTHONIOENCODING: 'utf-8', CHCP: '65001' } : process.env;
@@ -140,12 +143,16 @@ export class CLIProvider implements Provider {
     }
 
     // Kimi CLI v1.24+ syntax: kimi --print --final-message-only -p "prompt"
+    // Note: Use --quiet for cleaner output, --print enables non-interactive mode
     const args = ['--print', '--final-message-only', '-p', content];
     
     // Add thinking mode if reasoning is high
     if (this.config.reasoning === 'high') {
       args.push('--thinking');
     }
+    
+    // Add yolo mode to prevent interactive prompts
+    args.push('--yolo');
 
     const cliPath = this.config.cliPath ?? 'kimi';
     
@@ -170,10 +177,25 @@ export class CLIProvider implements Provider {
 
     child.stderr?.on('data', (data) => {
       const err = data.toString();
-      // Only show real errors, not warnings
-      if (err.includes('Error') && !err.includes('Try')) {
+      // Filter out non-error messages and box-drawing characters
+      const isRealError = err.includes('Error') && 
+                         !err.includes('Try') && 
+                         !err.includes('────') &&
+                         !err.includes('┌') &&
+                         !err.includes('┐') &&
+                         !err.includes('└') &&
+                         !err.includes('┘') &&
+                         !err.includes('│');
+      if (isRealError) {
         hasError = true;
-        buffer += `\n[CLI Error: ${err.trim()}]`;
+        // Clean up error message
+        const cleanErr = err
+          .replace(/[─│┌┐└┘├┤┬┴┼]/g, '')
+          .replace(/Error\s*[-─]+\+/gi, 'Error: ')
+          .trim();
+        if (cleanErr.length > 10) {
+          buffer += `\n[Error: ${cleanErr}]`;
+        }
       }
     });
 
