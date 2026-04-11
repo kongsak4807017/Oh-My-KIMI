@@ -124,6 +124,16 @@ export class CLIProvider implements Provider {
       return;
     }
 
+    // Check for non-ASCII characters (Thai, etc.)
+    // Kimi CLI on Windows has encoding issues with Unicode
+    if (/[^\x00-\x7F]/.test(content)) {
+      yield { content: '[ERROR] Kimi CLI on Windows does not support Thai/Unicode characters.\n', done: false };
+      yield { content: '[HINT] Use browser mode instead: omk --browser\n', done: false };
+      yield { content: '[HINT] Or use API mode: omk --api (requires KIMI_API_KEY)\n', done: false };
+      yield { content: '', done: true };
+      return;
+    }
+
     // Kimi CLI v1.24+ syntax: kimi --print --final-message-only -p "prompt"
     const args = ['--print', '--final-message-only', '-p', content];
     

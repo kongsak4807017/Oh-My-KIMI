@@ -1,7 +1,5 @@
-fix: update CLI provider for Kimi CLI v1.24+ syntax
+fix: detect Thai/Unicode and suggest alternative modes
 
-- Change from 'kimi chat' to 'kimi --print --final-message-only -p'
-- Kimi CLI v1.24+ uses different argument structure
-- Add --final-message-only for clean text output
-- Remove stdin piping, use -p flag instead
-- Increase timeout to 120s for complex tasks
+- Add detection for non-ASCII characters in CLI provider
+- Show helpful error when Thai/Unicode detected on Windows
+- Suggest using --browser or --api mode instead
