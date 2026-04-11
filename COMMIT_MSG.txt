@@ -1,8 +1,7 @@
-fix: improve Windows compatibility and add debug logging
+fix: update CLI provider for Kimi CLI v1.24+ syntax
 
-- Replace remaining emoji with text labels for Windows CMD
-- Add [THINKING...] indicator before AI response
-- Add better error handling in CLI provider stream
-- Add timeout protection (60s) for CLI requests
-- Fix ANSI color codes that cause display issues on Windows
-- Add debug output for provider detection
+- Change from 'kimi chat' to 'kimi --print --final-message-only -p'
+- Kimi CLI v1.24+ uses different argument structure
+- Add --final-message-only for clean text output
+- Remove stdin piping, use -p flag instead
+- Increase timeout to 120s for complex tasks

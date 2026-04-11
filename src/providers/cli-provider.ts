@@ -65,10 +65,11 @@ export class CLIProvider implements Provider {
     const content = lastMessage?.content ?? '';
 
     return new Promise((resolve, reject) => {
-      const args = ['chat', '--no-stream'];
+      // Kimi CLI v1.24+ syntax: kimi --print --final-message-only -p "prompt"
+      const args = ['--print', '--final-message-only', '-p', content];
       
-      if (this.config.reasoning) {
-        args.push('--reasoning', this.config.reasoning);
+      if (this.config.reasoning === 'high') {
+        args.push('--thinking');
       }
       
       const child = spawn(this.config.cliPath ?? 'kimi', args, {
@@ -88,7 +89,7 @@ export class CLIProvider implements Provider {
       });
       
       child.on('exit', (code) => {
-        if (code === 0) {
+        if (code === 0 || (code === null && output.length > 0)) {
           resolve({
             content: output.trim(),
             usage: undefined,
@@ -102,15 +103,15 @@ export class CLIProvider implements Provider {
         reject(new Error(`Failed to run CLI: ${err.message}`));
       });
       
-      // Send input
-      child.stdin?.write(content);
-      child.stdin?.end();
-      
-      // Timeout
+      // Timeout - kimi can be slow for complex tasks
       setTimeout(() => {
         child.kill();
-        reject(new Error('CLI command timed out'));
-      }, this.config.timeout ?? 60000);
+        if (output.length > 0) {
+          resolve({ content: output.trim(), usage: undefined });
+        } else {
+          reject(new Error('CLI command timed out'));
+        }
+      }, this.config.timeout ?? 120000);
     });
   }
 
@@ -123,10 +124,12 @@ export class CLIProvider implements Provider {
       return;
     }
 
-    const args = ['chat'];
+    // Kimi CLI v1.24+ syntax: kimi --print --final-message-only -p "prompt"
+    const args = ['--print', '--final-message-only', '-p', content];
     
-    if (this.config.reasoning) {
-      args.push('--reasoning', this.config.reasoning);
+    // Add thinking mode if reasoning is high
+    if (this.config.reasoning === 'high') {
+      args.push('--thinking');
     }
 
     const cliPath = this.config.cliPath ?? 'kimi';
@@ -135,10 +138,6 @@ export class CLIProvider implements Provider {
       stdio: ['pipe', 'pipe', 'pipe'],
       shell: true,
     });
-
-    // Send input immediately
-    child.stdin?.write(content);
-    child.stdin?.end();
 
     let buffer = '';
     let hasError = false;
@@ -149,15 +148,16 @@ export class CLIProvider implements Provider {
 
     child.stderr?.on('data', (data) => {
       const err = data.toString();
-      if (err.includes('error') || err.includes('Error')) {
+      // Only show real errors, not warnings
+      if (err.includes('Error') && !err.includes('Try')) {
         hasError = true;
-        buffer += `[CLI Error: ${err}]`;
+        buffer += `\n[CLI Error: ${err.trim()}]`;
       }
     });
 
     // Yield chunks as they arrive
     let checks = 0;
-    const maxChecks = 600; // 60 seconds timeout
+    const maxChecks = 1200; // 120 seconds timeout (kimi can be slow)
     
     while (child.exitCode === null && checks < maxChecks) {
       if (buffer.length > 0) {
