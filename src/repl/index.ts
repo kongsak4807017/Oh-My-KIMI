@@ -132,7 +132,7 @@ export class OMKREPL {
   }
 
   async start(options?: { provider?: string; reasoning?: string }): Promise<void> {
-    console.log('\n🚀 Welcome to Oh-my-KIMI (OMK)');
+    console.log('\nWelcome to Oh-my-KIMI (OMK)');
     
     // Initialize provider
     try {
@@ -143,15 +143,15 @@ export class OMKREPL {
       });
       
       const currentType = this.providerManager.getCurrentType();
-      console.log(`   Provider: ${currentType} (reasoning: ${options?.reasoning || 'medium'})`);
+      console.log(`[OK] Provider: ${currentType} (reasoning: ${options?.reasoning || 'medium'})`);
     } catch (err) {
       console.error('\n❌ Failed to initialize provider:');
       console.error(`   ${err instanceof Error ? err.message : err}`);
-      console.error('\n💡 Try: omk --provider=browser (for subscription mode)');
+      console.error('\n[HINT] Try: omk --provider=browser (for subscription mode)');
       process.exit(1);
     }
     
-    console.log('Type /help for available commands, or /exit to quit.\n');
+    console.log('Type /help for commands, /exit to quit\n');
 
     // Load plugins
     await this.pluginManager.loadAllPlugins();
@@ -473,7 +473,7 @@ export class OMKREPL {
     const sessionPath = join(this.cwd, '.omk', 'sessions', `${sessionName}.json`);
     
     writeFileSync(sessionPath, JSON.stringify(this.state.history, null, 2));
-    console.log(`\x1b[32mSession saved: ${sessionName}\x1b[0m`);
+    console.log(`[OK] Session saved: ${sessionName}`);
   }
 
   private async loadSession(name?: string): Promise<void> {
@@ -491,7 +491,7 @@ export class OMKREPL {
     }
 
     this.state.history = JSON.parse(readFileSync(sessionPath, 'utf-8'));
-    console.log(`\x1b[32mSession loaded: ${name} (${this.state.history.length} messages)\x1b[0m`);
+    console.log(`[OK] Session loaded: ${name} (${this.state.history.length} messages)`);
   }
 
   private addNote(text: string): void {
@@ -501,7 +501,7 @@ export class OMKREPL {
     }
     
     appendToNotepad(text, this.cwd);
-    console.log('\x1b[32mNote added.\x1b[0m');
+    console.log('[OK] Note added.');
   }
 
   private createTask(title: string): void {
@@ -516,7 +516,7 @@ export class OMKREPL {
       status: 'pending',
     }, this.cwd);
     
-    console.log(`\x1b[32mTask created: ${task.id}\x1b[0m`);
+    console.log(`[OK] Task created: ${task.id}`);
   }
 
   private addFileToContext(filePath?: string): void {
@@ -537,9 +537,9 @@ export class OMKREPL {
 
     if (!this.state.context.selectedFiles.includes(filePath)) {
       this.state.context.selectedFiles.push(filePath);
-      console.log(`\x1b[32mAdded to context: ${filePath}\x1b[0m`);
+      console.log(`[OK] Added to context: ${filePath}`);
     } else {
-      console.log(`\x1b[33mAlready in context: ${filePath}\x1b[0m`);
+      console.log(`[INFO] Already in context: ${filePath}`);
     }
   }
 
@@ -616,4 +616,15 @@ export async function startREPL(
 ): Promise<void> {
   const repl = new OMKREPL(cwd);
   await repl.start(options);
+  
+  // Keep process alive until REPL is closed
+  return new Promise((resolve) => {
+    const checkInterval = setInterval(() => {
+      // @ts-ignore - accessing private member
+      if (!repl.isRunning) {
+        clearInterval(checkInterval);
+        resolve();
+      }
+    }, 100);
+  });
 }

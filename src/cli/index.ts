@@ -465,25 +465,25 @@ async function launch(args: string[]): Promise<void> {
     process.exit(1);
   }
   
-  console.log('🚀 Launching Oh-my-KIMI...');
+  console.log('>> Launching Oh-my-KIMI...');
   
   // Show Root Agent status
   if (isUsingGlobalFallback()) {
-    console.log('🌐 Global Root Agent active (no project setup needed)');
+    console.log('[GLOBAL] Root Agent active (no project setup needed)');
   }
   
   console.log(`Provider: ${flags.provider || 'auto'}`);
   console.log(`Reasoning: ${flags.reasoning || 'medium'}`);
   
   if (flags.yolo) {
-    console.log('⚠️  YOLO mode enabled - bypassing confirmations');
+    console.log('[WARNING] YOLO mode enabled - bypassing confirmations');
   }
   
   // Show provider hint
   if (!flags.provider || flags.provider === 'auto') {
     if (!process.env.KIMI_API_KEY) {
-      console.log('\n💡 No API key found. Will try browser mode (subscription)');
-      console.log('   Tip: Use --browser flag to connect via your Kimi subscription');
+      console.log('\n[INFO] No API key found. Will try browser mode (subscription)');
+      console.log('       Tip: Use --browser flag to connect via your Kimi subscription');
     }
   }
 
