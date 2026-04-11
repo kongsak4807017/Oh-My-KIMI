@@ -344,6 +344,106 @@ export class OMKREPL {
   }
 
   private async handleChat(input: string): Promise<void> {
+    // Check if input contains GitHub URL
+    const githubUrlMatch = input.match(/https:\/\/github\.com\/[^\s]+/);
+    
+    if (githubUrlMatch && (input.includes('clone') || input.includes('download') || input.includes('ศึกษา'))) {
+      // Handle repo analysis
+      await this.handleRepoAnalysis(githubUrlMatch[0], input);
+      return;
+    }
+
+    // Regular chat flow
+    await this.handleRegularChat(input);
+  }
+
+  private async handleRepoAnalysis(url: string, originalInput: string): Promise<void> {
+    const { getActivityLogger } = await import('./activity-logger.js');
+    const logger = getActivityLogger();
+    logger.start();
+    
+    logger.addActivity({
+      type: 'action',
+      message: `Cloning repository: ${url}`,
+      status: 'running',
+    });
+
+    try {
+      // Import and use repo analyzer
+      const { getRepoAnalyzer } = await import('../utils/repo-analyzer.js');
+      const analyzer = getRepoAnalyzer();
+      
+      const repoInfo = await analyzer.analyzeRepo(url);
+      
+      logger.addActivity({
+        type: 'complete',
+        message: `Analyzed ${repoInfo.name}: ${repoInfo.structure.length} files`,
+        status: 'completed',
+      });
+
+      // Format for AI
+      const repoContext = analyzer.formatForAI(repoInfo);
+      
+      logger.addActivity({
+        type: 'thinking',
+        message: 'Analyzing repository with AI...',
+        status: 'running',
+      });
+
+      // Send to AI
+      const provider = this.providerManager.getProvider();
+      let fullResponse = '';
+      let chunkCount = 0;
+      
+      const systemPrompt = `You are analyzing a GitHub repository. Here is the repository information:\n\n${repoContext}`;
+      
+      for await (const chunk of provider.stream({
+        messages: [
+          { role: 'system', content: systemPrompt },
+          { role: 'user', content: originalInput },
+        ],
+      })) {
+        process.stdout.write(chunk.content);
+        fullResponse += chunk.content;
+        chunkCount++;
+        
+        if (chunkCount % 50 === 0) {
+          logger.addActivity({
+            type: 'action',
+            message: `Analysis: ${chunkCount} chunks`,
+            status: 'completed',
+          });
+        }
+        
+        if (chunk.done) break;
+      }
+
+      logger.addActivity({
+        type: 'complete',
+        message: 'Analysis complete',
+        status: 'completed',
+      });
+
+      console.log('\n');
+      this.state.history.push({ role: 'assistant', content: fullResponse });
+      
+      // Cleanup
+      analyzer.cleanup(repoInfo.localPath);
+      
+    } catch (err) {
+      const errorMsg = err instanceof Error ? err.message : String(err);
+      logger.addActivity({
+        type: 'error',
+        message: `Repo analysis failed: ${errorMsg}`,
+        status: 'failed',
+      });
+      console.error('\n[ERROR] Failed to analyze repository:', errorMsg);
+    } finally {
+      logger.stop();
+    }
+  }
+
+  private async handleRegularChat(input: string): Promise<void> {
     // Read AGENTS.md if exists (local first, then global fallback)
     const localAgentsPath = join(this.cwd, 'AGENTS.md');
     const globalAgentsPath = join(this.globalOmkPath, 'AGENTS.md');
@@ -387,7 +487,6 @@ export class OMKREPL {
       const provider = this.providerManager.getProvider();
       let fullResponse = '';
       let chunkCount = 0;
-      let lastUpdate = Date.now();
       
       // Create streaming timeout (10 minutes for complex tasks)
       const streamTimeout = 10 * 60 * 1000;

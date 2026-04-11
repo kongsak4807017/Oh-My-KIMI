@@ -1,7 +1,8 @@
-feat: add real-time activity logging and extend timeout
+feat: add repository analyzer for GitHub URLs
 
-- Add ActivityLogger with spinner animations and progress tracking
-- Show real-time activities: thinking, reading, writing, commands
-- Extend CLI timeout from 60s to 10 minutes for complex tasks
-- Log chunk progress every 50 chunks
-- Detect task type from input (repository, debugging, planning, etc.)
+- Add RepoAnalyzer class to clone and analyze GitHub repositories
+- Auto-detect GitHub URLs in user input
+- Clone repos with shallow clone (--depth 1) for speed
+- Extract README, structure, key files, and languages
+- Format repository info for AI analysis
+- Auto-cleanup after analysis
