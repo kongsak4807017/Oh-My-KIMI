@@ -1,8 +1,0 @@
-feat: add complete tool suite like OMX
-
-- File System Tools: $read_file, $write_file, $list_directory, $search_files
-- Web Tools: $web_fetch with GitHub API support
-- Code Intelligence: $diagnostics, $document_symbols, $find_references, $ast_grep_search
-- Execute Tool: $execute_command with security sandbox
-- Memory Tools: $memory_read, $memory_write (persistent project memory)
-- Tool dispatcher for AI integration
