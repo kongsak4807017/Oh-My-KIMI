@@ -3,6 +3,7 @@
  * Multi-agent orchestration for Kimi AI
  */
 
+import React from 'react';
 import { existsSync, mkdirSync, readFileSync, writeFileSync, rmSync } from 'fs';
 import { join, dirname, basename } from 'path';
 import { homedir } from 'os';
@@ -31,6 +32,7 @@ oh-my-kimi (omk) - Multi-agent orchestration for Kimi AI
 
 Usage:
   omk                    Launch Kimi interactive session
+  omk --tui              Launch TUI mode (full UI with agents panel)
   omk setup              Install skills, prompts, and AGENTS.md scaffolding
   omk doctor             Check installation health
   omk uninstall          Remove OMK configuration
@@ -50,6 +52,7 @@ Options:
   --cli                  Shortcut for --provider=cli
   --high                 Use high reasoning effort
   --yolo                 Bypass confirmations (dangerous)
+  --tui                  Use TUI mode (full terminal UI)
   --force                Force reinstall
   --dry-run              Show what would be done
   --verbose              Show detailed output
@@ -64,6 +67,11 @@ Provider Modes:
   browser                Use Kimi web interface (uses your subscription, free!)
   cli                    Use official Kimi CLI (if installed)
   auto                   Auto-detect best available (default)
+
+TUI Mode Hotkeys:
+  Ctrl+X                 Toggle mode (chat/plan/agent)
+  Shift+Tab              Toggle agents panel
+  Ctrl+C                 Exit
 `;
 
 const VERSION = "0.1.0";
@@ -487,12 +495,53 @@ async function launch(args: string[]): Promise<void> {
     }
   }
 
-  // Start interactive REPL with global config support
-  const { startREPL } = await import('../repl/index.js');
-  await startREPL(process.cwd(), {
-    provider: flags.provider,
-    reasoning: flags.reasoning,
-  });
+  // Check for TUI mode
+  const useTUI = args.includes('--tui');
+  
+  if (useTUI) {
+    // Start TUI mode
+    await launchTUI(flags);
+  } else {
+    // Start classic REPL mode
+    const { startREPL } = await import('../repl/index.js');
+    await startREPL(process.cwd(), {
+      provider: flags.provider,
+      reasoning: flags.reasoning,
+    });
+  }
+}
+
+// TUI Launcher
+async function launchTUI(flags: { provider?: string; reasoning?: string; yolo?: boolean }): Promise<void> {
+  const { render } = await import('ink');
+  const { OMKApp } = await import('../tui/app.js');
+  const { getProviderManager } = await import('../providers/manager.js');
+  
+  const providerManager = getProviderManager();
+  
+  // Initialize provider
+  try {
+    await providerManager.initialize({
+      type: (flags.provider as 'api' | 'browser' | 'cli' | 'auto') || 'auto',
+      reasoning: (flags.reasoning as 'low' | 'medium' | 'high') || 'medium',
+    });
+  } catch (err) {
+    console.error('Failed to initialize provider:', err);
+    process.exit(1);
+  }
+  
+  // Clear screen
+  console.clear();
+  
+  // Render TUI
+  render(
+    React.createElement(OMKApp, {
+      cwd: process.cwd(),
+      providerManager,
+      reasoning: (flags.reasoning as 'low' | 'medium' | 'high') || 'medium',
+      yolo: flags.yolo,
+    })
+  );
 }
 
 function parseFlags(args: string[]): { 

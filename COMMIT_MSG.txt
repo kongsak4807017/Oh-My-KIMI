@@ -1,5 +1,11 @@
-fix: use stdin mode for complex prompts on Windows
+feat: add full TUI (Terminal User Interface) mode
 
-- Detect when content has spaces on Windows platform
-- Use --input-format text with stdin instead of -p flag
-- Fixes argument parsing issues with spaces in Thai text
+- Add --tui flag for full terminal UI experience
+- Create Ink-based React components:
+  - Header: Shows mode, provider, reasoning level
+  - Footer: Context usage bar with progress indicator
+  - AgentPanel: Shows active agents and recent activities
+- Add real-time activity logging
+- Add keyboard shortcuts: Ctrl+X (toggle mode), Shift+Z (agents panel)
+- Custom spinner component for loading states
+- Integrate TUI launcher in CLI
