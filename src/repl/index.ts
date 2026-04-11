@@ -33,6 +33,7 @@ import { startMCPServer, stopMCPServer } from '../mcp/server.js';
 import { getContextManager, ContextStats } from '../utils/context-manager.js';
 import { getCodebaseIndexer, getFileChunker, RepositoryMap } from '../indexer/index.js';
 import { InteractiveAutocomplete } from './autocomplete-prompt.js';
+import { getGSDExecutor } from '../skills/gsd-executor.js';
 
 // REPL State
 interface REPLState {
@@ -57,6 +58,16 @@ const SKILL_PREFIXES = [
   '$git-master',
   '$build-fix',
   '$tdd',
+  '$gsd-new-project',
+  '$gsd-map-codebase',
+  '$gsd-discuss-phase',
+  '$gsd-plan-phase',
+  '$gsd-execute-phase',
+  '$gsd-verify-work',
+  '$gsd-ship',
+  '$gsd-quick',
+  '$gsd-progress',
+  '$gsd-next',
   '$analyze',
   '$visual-verdict',
   '$cancel',
@@ -103,10 +114,12 @@ export class OMKREPL {
   private autocomplete: InteractiveAutocomplete;
   private currentSessionId: string | null = null;
   private sessionTitle: string | null = null;
+  private gsdExecutor: ReturnType<typeof getGSDExecutor>;
 
   constructor(private cwd: string = process.cwd()) {
     this.codebaseIndexer = getCodebaseIndexer(this.cwd);
     this.autocomplete = new InteractiveAutocomplete(this.cwd);
+    this.gsdExecutor = getGSDExecutor(this.cwd);
     this.providerManager = getProviderManager();
     this.state = {
       history: [],
@@ -490,6 +503,12 @@ export class OMKREPL {
       return;
     }
 
+    // Check if it's a GSD command
+    if (skillName.startsWith('gsd-')) {
+      await this.handleGSDCommand(skillName, skillArgs);
+      return;
+    }
+
     // Load skill definition - try local, then global
     let skillPath = join(this.cwd, '.omk', 'skills', skillName, 'SKILL.md');
     let skillSource = 'local';
@@ -621,6 +640,50 @@ export class OMKREPL {
         status: 'failed',
         details: err instanceof Error ? err.message : String(err),
       });
+    }
+  }
+
+  private async handleGSDCommand(command: string, args: string): Promise<void> {
+    console.log(`\x1b[36m[GSD] Executing: ${command}\x1b[0m`);
+    
+    try {
+      switch (command) {
+        case 'gsd-new-project':
+          await this.gsdExecutor.newProject(args.trim() || undefined);
+          break;
+        case 'gsd-map-codebase':
+          await this.gsdExecutor.mapCodebase();
+          break;
+        case 'gsd-discuss-phase':
+          await this.gsdExecutor.discussPhase(parseInt(args) || 1);
+          break;
+        case 'gsd-plan-phase':
+          await this.gsdExecutor.planPhase(parseInt(args) || 1);
+          break;
+        case 'gsd-execute-phase':
+          await this.gsdExecutor.executePhase(parseInt(args) || 1);
+          break;
+        case 'gsd-verify-work':
+          await this.gsdExecutor.verifyWork(parseInt(args) || 1);
+          break;
+        case 'gsd-ship':
+          await this.gsdExecutor.ship(parseInt(args) || 1);
+          break;
+        case 'gsd-quick':
+          await this.gsdExecutor.quick(args.trim() || 'Quick task');
+          break;
+        case 'gsd-progress':
+          await this.gsdExecutor.progress();
+          break;
+        case 'gsd-next':
+          await this.gsdExecutor.next();
+          break;
+        default:
+          console.log(`\x1b[33m[GSD] Unknown command: ${command}\x1b[0m`);
+          console.log('Available: $gsd-new-project, $gsd-discuss-phase, $gsd-plan-phase, etc.');
+      }
+    } catch (err) {
+      console.error(`\x1b[31m[GSD] Error: ${err}\x1b[0m`);
     }
   }
 
