@@ -1,9 +1,10 @@
 /**
- * Activity Logger - Real-time activity display
- * Shows what the AI is doing step by step
+ * Activity Logger - REPL activity HUD inspired by OMX.
+ * Shows which agent/lane is active and what it is doing.
  */
 
 import { stdout } from 'process';
+import { getDashboardState } from './dashboard-state.js';
 
 export interface Activity {
   id: string;
@@ -13,200 +14,125 @@ export interface Activity {
   status: 'running' | 'completed' | 'failed';
   details?: string;
   toolName?: string;
-  toolArgs?: any;
-  toolResult?: any;
+  toolArgs?: unknown;
+  toolResult?: unknown;
+  agent?: string;
+  role?: string;
+  phase?: string;
+  task?: string;
+  skillName?: string;
+  taskType?: string;
 }
 
 export class ActivityLogger {
   private activities: Activity[] = [];
-  private currentLine: number = 0;
-  private isActive: boolean = false;
-  private spinnerFrames = ['⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦', '⠧', '⠇', '⠏'];
+  private isActive = false;
+  private spinnerFrames = ['-', '\\', '|', '/'];
   private spinnerIndex = 0;
   private spinnerInterval?: NodeJS.Timeout;
+  private renderedLines = 0;
+  private dashboard = getDashboardState();
 
-  start() {
+  configure(cwd: string): void {
+    this.dashboard.configure(cwd);
+  }
+
+  start(): void {
+    if (this.isActive) return;
     this.isActive = true;
     this.startSpinner();
   }
 
-  stop() {
+  stop(): void {
     this.isActive = false;
     if (this.spinnerInterval) {
       clearInterval(this.spinnerInterval);
+      this.spinnerInterval = undefined;
     }
-    // Clear the spinner line
-    this.clearLine();
-  }
-
-  private startSpinner() {
-    this.spinnerInterval = setInterval(() => {
-      if (!this.isActive) return;
-      this.spinnerIndex = (this.spinnerIndex + 1) % this.spinnerFrames.length;
-      this.renderLatest();
-    }, 80);
+    this.render();
   }
 
   addActivity(activity: Omit<Activity, 'id' | 'timestamp'>): Activity {
     const fullActivity: Activity = {
       ...activity,
-      id: Date.now().toString() + Math.random(),
+      id: `${Date.now()}-${Math.random()}`,
       timestamp: new Date(),
     };
-    
+
     this.activities.push(fullActivity);
-    
-    // Keep only last 20 activities
-    if (this.activities.length > 20) {
+    if (this.activities.length > 30) {
       this.activities.shift();
     }
-    
-    // Render immediately
-    this.renderActivity(fullActivity);
-    
+
+    this.dashboard.updateFromActivity(fullActivity);
+    this.render();
     return fullActivity;
   }
 
-  updateActivity(id: string, updates: Partial<Activity>) {
-    const activity = this.activities.find(a => a.id === id);
-    if (activity) {
-      Object.assign(activity, updates);
-      this.renderLatest();
-    }
+  updateActivity(id: string, updates: Partial<Activity>): void {
+    const activity = this.activities.find(item => item.id === id);
+    if (!activity) return;
+
+    Object.assign(activity, updates);
+    this.dashboard.updateFromActivity(activity);
+    this.render();
   }
 
-  private getIcon(type: Activity['type'], status: Activity['status']): string {
-    if (status === 'running') {
-      return this.spinnerFrames[this.spinnerIndex];
-    }
-    
-    const icons: Record<Activity['type'], string> = {
-      action: '⚡',
-      thinking: '💭',
-      reading: '📖',
-      writing: '✏️',
-      command: '⚙️',
-      complete: '✅',
-      error: '❌',
-      tool_call: '🔧',
-      tool_result: '📤',
-    };
-    
-    return icons[type] || '•';
-  }
-
-  private getColor(type: Activity['type'], status: Activity['status']): string {
-    if (status === 'failed') return '\x1b[31m'; // red
-    if (status === 'completed') return '\x1b[32m'; // green
-    
-    const colors: Record<Activity['type'], string> = {
-      action: '\x1b[33m',    // yellow
-      thinking: '\x1b[36m',  // cyan
-      reading: '\x1b[34m',   // blue
-      writing: '\x1b[35m',   // magenta
-      command: '\x1b[90m',   // gray
-      complete: '\x1b[32m',  // green
-      error: '\x1b[31m',     // red
-      tool_call: '\x1b[96m', // bright cyan
-      tool_result: '\x1b[95m', // bright magenta
-    };
-    
-    return colors[type] || '\x1b[0m';
-  }
-
-  private renderActivity(activity: Activity) {
-    const icon = this.getIcon(activity.type, activity.status);
-    const color = this.getColor(activity.type, activity.status);
-    const reset = '\x1b[0m';
-    const dim = '\x1b[2m';
-    
-    // Format time
-    const time = activity.timestamp.toLocaleTimeString('en-US', { 
-      hour12: false, 
-      hour: '2-digit', 
-      minute: '2-digit',
-      second: '2-digit'
-    });
-    
-    // Print activity line
-    const line = `${color}[${time}] ${icon} ${activity.message}${reset}`;
-    console.log(line);
-    
-    // If has details, print on next line
-    if (activity.details) {
-      console.log(`  ${color}→ ${activity.details}${reset}`);
-    }
-    
-    // Tool call details
-    if (activity.type === 'tool_call' && activity.toolArgs) {
-      const argsStr = JSON.stringify(activity.toolArgs, null, 2).split('\n').slice(0, 5).join('\n  ');
-      console.log(`  ${dim}Args: ${argsStr}${reset}`);
-    }
-    
-    // Tool result details
-    if (activity.type === 'tool_result' && activity.toolResult) {
-      let resultStr = '';
-      if (typeof activity.toolResult === 'string') {
-        resultStr = activity.toolResult.slice(0, 200);
-      } else {
-        resultStr = JSON.stringify(activity.toolResult, null, 2).split('\n').slice(0, 5).join('\n  ');
-      }
-      console.log(`  ${dim}Result: ${resultStr}${reset}`);
-    }
-  }
-
-  private renderLatest() {
-    // Find running activities
-    const runningActivities = this.activities.filter(a => a.status === 'running');
-    
-    if (runningActivities.length === 0) return;
-    
-    // Update spinner on current line
-    const latest = runningActivities[runningActivities.length - 1];
-    const icon = this.spinnerFrames[this.spinnerIndex];
-    const color = this.getColor(latest.type, latest.status);
-    const reset = '\x1b[0m';
-    const dim = '\x1b[2m';
-    
-    // Build detailed status message
-    let detail = '';
-    if (latest.type === 'thinking') {
-      detail = ' [Analyzing your request...]';
-    } else if (latest.type === 'reading') {
-      detail = latest.details ? ` [${latest.details}]` : ' [Reading file...]';
-    } else if (latest.type === 'writing') {
-      detail = latest.details ? ` [${latest.details}]` : ' [Writing file...]';
-    } else if (latest.type === 'command') {
-      detail = latest.details ? ` [Running: ${latest.details}]` : ' [Executing command...]';
-    } else if (latest.type === 'tool_call') {
-      detail = latest.toolName ? ` [Tool: ${latest.toolName}]` : ' [Calling tool...]';
-    }
-    
-    // Move cursor up and rewrite line
-    this.clearLine();
-    process.stdout.write(`\r${color}${icon} ${latest.message}${dim}${detail}${reset}`);
-  }
-
-  private clearLine() {
-    process.stdout.write('\r\x1b[K');
-  }
-
-  showSummary() {
+  showSummary(): void {
     const completed = this.activities.filter(a => a.status === 'completed').length;
     const failed = this.activities.filter(a => a.status === 'failed').length;
     const running = this.activities.filter(a => a.status === 'running').length;
-    
-    console.log('\n─'.repeat(50));
+
+    console.log('\n' + '-'.repeat(60));
     console.log(`Activities: ${completed} completed, ${failed} failed, ${running} running`);
-    console.log('─'.repeat(50));
+    console.log('-'.repeat(60));
   }
 
-  clear() {
+  clear(): void {
     this.activities = [];
+    this.dashboard.clear();
+    this.stop();
+  }
+
+  private startSpinner(): void {
+    this.spinnerInterval = setInterval(() => {
+      if (!this.isActive) return;
+      this.spinnerIndex = (this.spinnerIndex + 1) % this.spinnerFrames.length;
+      this.render();
+    }, 100);
+  }
+
+  private render(): void {
+    const running = this.activities.filter(activity => activity.status === 'running');
+    const latestRunning = running.length > 0 ? running[running.length - 1] : undefined;
+    const spinner = this.isActive && latestRunning ? this.spinnerFrames[this.spinnerIndex] : undefined;
+    const lines = this.dashboard.getRenderLines(stdout.columns || 100, spinner);
+
+    if (latestRunning?.details) {
+      lines[lines.length - 2] = this.injectEventDetail(lines[lines.length - 2], latestRunning.details, stdout.columns || 100);
+    }
+
+    this.rewind();
+    stdout.write(lines.join('\n') + '\n');
+    this.renderedLines = lines.length;
+  }
+
+  private injectEventDetail(eventLine: string, detail: string, width: number): string {
+    const clean = detail.replace(/\s+/g, ' ').trim();
+    const maxWidth = Math.max(20, Math.min(width - 18, 60));
+    const clipped = clean.length > maxWidth ? `${clean.slice(0, maxWidth - 3)}...` : clean;
+    return eventLine.replace(/\|\s*$/, ` | ${clipped} |`).slice(0, width);
+  }
+
+  private rewind(): void {
+    if (this.renderedLines <= 0) return;
+
+    for (let index = 0; index < this.renderedLines; index++) {
+      stdout.write('\x1b[1A\r\x1b[2K');
+    }
   }
 }
 
-// Singleton instance
 let logger: ActivityLogger | null = null;
 
 export function getActivityLogger(): ActivityLogger {

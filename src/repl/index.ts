@@ -33,7 +33,18 @@ import { startMCPServer, stopMCPServer } from '../mcp/server.js';
 import { getContextManager, ContextStats } from '../utils/context-manager.js';
 import { getCodebaseIndexer, getFileChunker, RepositoryMap } from '../indexer/index.js';
 import { InteractiveAutocomplete } from './autocomplete-prompt.js';
+import { getActivityLogger } from './activity-logger.js';
 import { getGSDExecutor } from '../skills/gsd-executor.js';
+import { getFileSystemTools } from '../tools/file-system.js';
+import { getMemoryTools } from '../tools/memory.js';
+import { resolveExecutionProfile } from '../orchestration/phase-map.js';
+import {
+  buildSkillSystemPrompt,
+  detectSkillInvocations,
+  getWorkspaceAgentsContent,
+  listAvailableSkills,
+  loadSkillContent,
+} from '../skills/runtime.js';
 
 // REPL State
 interface REPLState {
@@ -45,34 +56,6 @@ interface REPLState {
     selectedFiles?: string[];
   };
 }
-
-// Skill registry
-const SKILL_PREFIXES = [
-  '$ralph',
-  '$team',
-  '$plan',
-  '$deep-interview',
-  '$autopilot',
-  '$code-review',
-  '$security-review',
-  '$git-master',
-  '$build-fix',
-  '$tdd',
-  '$gsd-new-project',
-  '$gsd-map-codebase',
-  '$gsd-discuss-phase',
-  '$gsd-plan-phase',
-  '$gsd-execute-phase',
-  '$gsd-verify-work',
-  '$gsd-ship',
-  '$gsd-quick',
-  '$gsd-progress',
-  '$gsd-next',
-  '$analyze',
-  '$visual-verdict',
-  '$cancel',
-  '$help',
-];
 
 // Built-in commands
 const BUILTIN_COMMANDS = [
@@ -115,12 +98,15 @@ export class OMKREPL {
   private currentSessionId: string | null = null;
   private sessionTitle: string | null = null;
   private gsdExecutor: ReturnType<typeof getGSDExecutor>;
+  private availableSkills: string[] = [];
 
   constructor(private cwd: string = process.cwd()) {
     this.codebaseIndexer = getCodebaseIndexer(this.cwd);
     this.autocomplete = new InteractiveAutocomplete(this.cwd);
     this.gsdExecutor = getGSDExecutor(this.cwd);
+    this.availableSkills = listAvailableSkills(this.cwd);
     this.providerManager = getProviderManager();
+    getActivityLogger().configure(this.cwd);
     this.state = {
       history: [],
       currentSkill: null,
@@ -196,6 +182,8 @@ export class OMKREPL {
   }
 
   private completer(line: string): [string[], string] {
+    const skillPrefixes = this.availableSkills.map(skill => `$${skill}`);
+
     // Empty or whitespace - show hints
     if (!line.trim()) {
       return [['/help', '/exit', '$tools', '@filename'], ''];
@@ -214,8 +202,7 @@ export class OMKREPL {
         '$read_file', '$write_file', '$list_directory', '$search_files',
         '$web_fetch', '$diagnostics', '$document_symbols', '$find_references',
         '$execute_command', '$memory_read', '$memory_write',
-        '$ralph', '$team', '$plan', '$deep-interview', '$autopilot',
-        '$code-review', '$security-review', '$help',
+        ...skillPrefixes,
       ];
       const matches = tools.filter(t => t.startsWith(line));
       return [matches, line];
@@ -228,7 +215,6 @@ export class OMKREPL {
       const afterAt = line.slice(atIndex + 1);
       
       try {
-        const { getFileSystemTools } = require('../tools/file-system.js');
         const fsTools = getFileSystemTools(this.cwd);
         const { entries } = fsTools.listDirectory({ path: '.', recursive: true });
         const files = entries
@@ -242,7 +228,7 @@ export class OMKREPL {
     }
     
     // Default: skills + commands
-    const completions = [...SKILL_PREFIXES, ...BUILTIN_COMMANDS];
+    const completions = [...skillPrefixes, ...BUILTIN_COMMANDS];
     const hits = completions.filter(c => c.startsWith(line));
     return [hits.length ? hits : completions, line];
   }
@@ -275,6 +261,10 @@ export class OMKREPL {
     }
     
     console.log('Type /help for commands, /exit to quit\n');
+    const logger = getActivityLogger();
+    logger.clear();
+    logger.start();
+    logger.stop();
 
     // Load plugins
     await this.pluginManager.loadAllPlugins();
@@ -305,7 +295,9 @@ export class OMKREPL {
     }
   }
 
-  private async handleInput(input: string): Promise<void> {
+  private async handleInput(rawInput: string): Promise<void> {
+    let input = rawInput;
+
     if (!input) {
       return; // Loop will prompt again
     }
@@ -320,15 +312,17 @@ export class OMKREPL {
         return;
       }
 
-      // Check for skill invocation
-      if (input.startsWith('$')) {
-        await this.handleSkill(input);
-        return;
-      }
-
       // Check for file mention (@filename)
       if (input.includes('@')) {
         input = await this.handleFileMentions(input);
+      }
+
+      const detectedSkills = detectSkillInvocations(input)
+        .filter(match => loadSkillContent(this.cwd, match.skillName));
+      if (detectedSkills.length > 0) {
+        await this.handleSkill(input, detectedSkills.map(match => match.skillName), detectedSkills.some(match => match.kind === 'keyword'));
+        this.saveCurrentSession(rawInput);
+        return;
       }
 
       // Regular chat with Kimi
@@ -384,6 +378,9 @@ export class OMKREPL {
 
       case '/clear':
         console.clear();
+        getActivityLogger().clear();
+        getActivityLogger().start();
+        getActivityLogger().stop();
         break;
 
       case '/history':
@@ -489,64 +486,99 @@ export class OMKREPL {
     // Input loop will prompt again
   }
 
-  private async handleSkill(input: string): Promise<void> {
-    const skillName = input.split(' ')[0].slice(1);
-    const skillArgs = input.slice(input.indexOf(' ') + 1);
+  private async handleSkill(input: string, requestedSkills?: string[], autoDetected: boolean = false): Promise<void> {
+    const explicitSkillName = input.split(' ')[0].slice(1);
+    const skillNames = requestedSkills?.length ? requestedSkills : [explicitSkillName];
+    const skillArgs = requestedSkills?.length
+      ? input
+      : (input.includes(' ') ? input.slice(input.indexOf(' ') + 1) : '');
+    const primarySkill = skillNames[0];
 
     // Check if it's a tool command (file_system, web_fetch, etc.)
     const toolCommands = ['read_file', 'write_file', 'list_directory', 'search_files', 
                           'web_fetch', 'diagnostics', 'document_symbols', 'find_references',
                           'execute_command', 'memory_read', 'memory_write'];
     
-    if (toolCommands.includes(skillName)) {
-      await this.handleToolCommand(skillName, skillArgs);
+    if (toolCommands.includes(primarySkill)) {
+      await this.handleToolCommand(primarySkill, skillArgs);
       return;
     }
 
     // Check if it's a GSD command
-    if (skillName.startsWith('gsd-')) {
-      await this.handleGSDCommand(skillName, skillArgs);
+    if (primarySkill.startsWith('gsd-')) {
+      await this.handleGSDCommand(primarySkill, skillArgs);
       return;
     }
 
-    // Load skill definition - try local, then global
-    let skillPath = join(this.cwd, '.omk', 'skills', skillName, 'SKILL.md');
-    let skillSource = 'local';
-    
-    if (!existsSync(skillPath)) {
-      skillPath = join(this.globalOmkPath, 'skills', skillName, 'SKILL.md');
-      skillSource = 'global';
-    }
-    
-    if (!existsSync(skillPath)) {
-      console.log(`\x1b[33mSkill not found: ${skillName}\x1b[0m`);
+    const resolvedSkills = skillNames
+      .map(skillName => loadSkillContent(this.cwd, skillName))
+      .filter((skill): skill is NonNullable<typeof skill> => Boolean(skill));
+
+    if (resolvedSkills.length === 0) {
+      console.log(`\x1b[33mSkill not found: ${primarySkill}\x1b[0m`);
       console.log('Available skills: try /skills to list available skills');
       return;
     }
 
-    const skillContent = readFileSync(skillPath, 'utf-8');
-    
-    if (skillSource === 'global') {
-      console.log(`\x1b[36m[Loading skill from global: ${skillName}]\x1b[0m`);
-    }
-
     // Set current skill mode
-    this.state.currentSkill = skillName;
+    this.state.currentSkill = resolvedSkills.map(skill => skill.skillName).join(',');
     
-    writeModeState(skillName, {
-      mode: skillName,
+    writeModeState(primarySkill, {
+      mode: primarySkill,
       active: true,
       current_phase: 'running',
       started_at: new Date().toISOString(),
-      state: { args: skillArgs },
+      state: { args: skillArgs, skills: resolvedSkills.map(skill => skill.skillName), autoDetected },
     }, this.cwd);
 
-    console.log(`\x1b[36m[Activating skill: ${skillName}]\x1b[0m`);
+    if (autoDetected) {
+      console.log(`\x1b[36m[Auto-routed skill(s): ${resolvedSkills.map(skill => `$${skill.skillName}`).join(', ')}]\x1b[0m`);
+    } else {
+      console.log(`\x1b[36m[Activating skill: ${resolvedSkills.map(skill => skill.skillName).join(', ')}]\x1b[0m`);
+    }
+
+    const logger = getActivityLogger();
+    const profile = resolveExecutionProfile({ skillName: primarySkill, cwd: this.cwd });
+    logger.clear();
+    logger.start();
+    logger.addActivity({
+      type: 'action',
+      status: 'completed',
+      agent: 'router',
+      role: 'dispatcher',
+      message: `Selected skill lane: ${resolvedSkills.map(skill => `$${skill.skillName}`).join(', ')}`,
+      details: autoDetected ? 'Triggered from keyword routing' : 'Triggered explicitly by user input',
+      skillName: primarySkill,
+    });
+    logger.addActivity({
+      type: 'reading',
+      status: 'completed',
+      agent: 'context',
+      role: 'workspace',
+      message: 'Loaded skill instructions and AGENTS.md context',
+      details: `${resolvedSkills.length} skill(s), provider=${this.providerManager.getCurrentType() ?? 'unknown'}`,
+      skillName: primarySkill,
+    });
+    const runningActivity = logger.addActivity({
+      type: 'thinking',
+      status: 'running',
+      agent: profile.agent,
+      role: profile.role,
+      message: `Preparing ${profile.task}`,
+      details: skillArgs || input,
+      skillName: primarySkill,
+    });
 
     // Create system message with skill instructions
     const systemMessage: ChatMessage = {
       role: 'system',
-      content: `You are executing the ${skillName} skill. Follow these instructions:\n\n${skillContent}\n\nUser input: ${skillArgs}`,
+      content: resolvedSkills.map(skill => buildSkillSystemPrompt({
+        skillName: skill.skillName,
+        skillContent: skill.content,
+        userInput: skillArgs || input,
+        agentsContent: getWorkspaceAgentsContent(this.cwd),
+        source: skill.source,
+      })).join('\n\n---\n\n'),
     };
 
     // Execute skill
@@ -559,6 +591,14 @@ export class OMKREPL {
         undefined,
         skillArgs
       );
+
+      logger.updateActivity(runningActivity.id, {
+        status: 'completed',
+        message: `${profile.agent} received optimized context`,
+        details: `${optimizedMessages.length} message(s) ready for Kimi`,
+        skillName: primarySkill,
+      });
+      logger.stop();
       
       const response = await provider.chat({
         messages: [
@@ -573,14 +613,16 @@ export class OMKREPL {
       this.state.history.push({ role: 'assistant', content });
 
     } catch (err) {
+      logger.stop();
       console.error('\x1b[31mSkill execution failed:', err, '\x1b[0m');
+    } finally {
+      clearModeState(primarySkill, this.cwd);
       this.state.currentSkill = null;
     }
   }
 
   private async handleToolCommand(toolName: string, argsStr: string): Promise<void> {
     // Import activity logger
-    const { getActivityLogger } = await import('./activity-logger.js');
     const logger = getActivityLogger();
     
     // Parse JSON arguments
@@ -596,10 +638,13 @@ export class OMKREPL {
     // Log tool call
     logger.addActivity({
       type: 'tool_call',
-      message: `Tool: ${toolName}`,
+      agent: 'tool-runner',
+      role: 'executor',
+      message: `Invoking tool ${toolName}`,
       status: 'running',
       toolName,
       toolArgs: args,
+      details: `Preparing arguments for $${toolName}`,
     });
     
     try {
@@ -627,7 +672,9 @@ export class OMKREPL {
       // Log tool result
       logger.addActivity({
         type: 'tool_result',
-        message: `Result: ${toolName}`,
+        agent: 'tool-runner',
+        role: 'executor',
+        message: `Tool ${toolName} completed`,
         status: 'completed',
         toolName,
         toolResult: result,
@@ -636,7 +683,9 @@ export class OMKREPL {
     } catch (err) {
       logger.addActivity({
         type: 'error',
-        message: `Tool failed: ${toolName}`,
+        agent: 'tool-runner',
+        role: 'executor',
+        message: `Tool ${toolName} failed`,
         status: 'failed',
         details: err instanceof Error ? err.message : String(err),
       });
@@ -702,14 +751,28 @@ export class OMKREPL {
   }
 
   private async handleRepoAnalysis(url: string, originalInput: string): Promise<void> {
-    const { getActivityLogger } = await import('./activity-logger.js');
     const logger = getActivityLogger();
+    logger.clear();
+    const profile = resolveExecutionProfile({ taskType: 'repository-analysis', cwd: this.cwd });
     logger.start();
     
     logger.addActivity({
       type: 'action',
-      message: `Cloning repository: ${url}`,
+      agent: 'router',
+      role: 'dispatcher',
+      message: `Routing request to ${profile.agent}`,
+      details: profile.task,
+      status: 'completed',
+      taskType: 'repository-analysis',
+    });
+
+    logger.addActivity({
+      type: 'reading',
+      agent: profile.agent,
+      role: profile.role,
+      message: `Cloning repository ${url}`,
       status: 'running',
+      taskType: 'repository-analysis',
     });
 
     try {
@@ -721,8 +784,12 @@ export class OMKREPL {
       
       logger.addActivity({
         type: 'complete',
-        message: `Analyzed ${repoInfo.name}: ${repoInfo.structure.length} files`,
+        agent: profile.agent,
+        role: profile.role,
+        message: `Indexed ${repoInfo.name}`,
+        details: `${repoInfo.structure.length} files discovered`,
         status: 'completed',
+        taskType: 'repository-analysis',
       });
 
       // Format for AI
@@ -730,8 +797,12 @@ export class OMKREPL {
       
       logger.addActivity({
         type: 'thinking',
-        message: 'Analyzing repository with AI...',
+        agent: 'kimi',
+        role: 'explorer',
+        message: 'Handing repository snapshot to Kimi',
+        details: 'Preparing analysis response',
         status: 'running',
+        taskType: 'repository-analysis',
       });
 
       // Send to AI
@@ -764,8 +835,11 @@ export class OMKREPL {
 
       logger.addActivity({
         type: 'complete',
-        message: 'Analysis complete',
+        agent: 'kimi',
+        role: 'explorer',
+        message: 'Repository analysis complete',
         status: 'completed',
+        taskType: 'repository-analysis',
       });
 
       console.log('\n');
@@ -825,18 +899,24 @@ export class OMKREPL {
     }
 
     // Import activity logger
-    const { getActivityLogger } = await import('./activity-logger.js');
     const logger = getActivityLogger();
+    logger.clear();
     logger.start();
     
     // Detect task type from input
     const taskType = this.detectTaskType(input);
+    const profile = resolveExecutionProfile({ taskType, cwd: this.cwd });
+    const providerType = this.providerManager.getCurrentType() ?? 'unknown';
+    const agentsSource = existsSync(localAgentsPath) ? 'local AGENTS.md' : existsSync(globalAgentsPath) ? 'global AGENTS.md' : 'default system prompt';
     
-    // Log initial activity
     logger.addActivity({
-      type: 'thinking',
-      message: `Processing: ${input.slice(0, 50)}...`,
-      status: 'running',
+      type: 'action',
+      agent: 'router',
+      role: 'dispatcher',
+      message: `Routed request to ${profile.agent}`,
+      details: `taskType=${taskType}, provider=${providerType}`,
+      status: 'completed',
+      taskType,
     });
 
     try {
@@ -854,13 +934,26 @@ export class OMKREPL {
         this.state.context.selectedFiles,
         input
       );
+
+      logger.addActivity({
+        type: 'reading',
+        agent: 'context',
+        role: 'workspace',
+        message: 'Loaded workspace instructions',
+        details: `${agentsSource}; selectedFiles=${this.state.context.selectedFiles?.length ?? 0}`,
+        status: 'completed',
+        taskType,
+      });
       
       // If cache hit, use cached response
       if (cached) {
         logger.addActivity({
           type: 'complete',
-          message: 'Cache hit - using cached response',
+          agent: 'cache',
+          role: 'context-manager',
+          message: 'Cache hit - returning saved answer',
           status: 'completed',
+          taskType,
         });
         console.log('\n' + cached + '\n');
         return;
@@ -870,10 +963,42 @@ export class OMKREPL {
       if (stats.compressed) {
         logger.addActivity({
           type: 'action',
-          message: `Context compressed: ${stats.totalTokens.toLocaleString()} tokens`,
+          agent: 'context',
+          role: 'context-manager',
+          message: 'Compressed context window',
+          details: `${stats.totalTokens.toLocaleString()} tokens in prompt`,
           status: 'completed',
+          taskType,
         });
       }
+
+      logger.addActivity({
+        type: 'reading',
+        agent: 'context',
+        role: 'codebase-indexer',
+        message: 'Prepared prompt context',
+        details: `${optimizedMessages.length} message(s) passed to ${profile.agent}`,
+        status: 'completed',
+        taskType,
+      });
+
+      const handoffActivity = logger.addActivity({
+        type: 'thinking',
+        agent: profile.agent,
+        role: profile.role,
+        message: `Kimi ${profile.role} is ${profile.task}`,
+        details: input.slice(0, 120),
+        status: 'running',
+        taskType,
+      });
+      logger.updateActivity(handoffActivity.id, {
+        status: 'completed',
+        message: `Handoff complete -> ${profile.agent}`,
+        details: 'Streaming response below',
+        taskType,
+      });
+      logger.stop();
+      console.log('');
       
       for await (const chunk of provider.stream({
         messages: [
@@ -885,8 +1010,11 @@ export class OMKREPL {
         if (Date.now() - startTime > streamTimeout) {
           logger.addActivity({
             type: 'error',
+            agent: profile.agent,
+            role: profile.role,
             message: 'Request timed out (10 minutes)',
             status: 'failed',
+            taskType,
           });
           break;
         }
@@ -900,8 +1028,12 @@ export class OMKREPL {
         if (chunkCount % 50 === 0) {
           logger.addActivity({
             type: 'action',
-            message: `Received ${chunkCount} chunks (${fullResponse.length} chars)`,
+            agent: profile.agent,
+            role: profile.role,
+            message: `Streaming progress: ${chunkCount} chunks`,
+            details: `${fullResponse.length} chars received`,
             status: 'completed',
+            taskType,
           });
         }
         
@@ -911,8 +1043,12 @@ export class OMKREPL {
       // Log completion
       logger.addActivity({
         type: 'complete',
-        message: `Response complete (${fullResponse.length} chars, ${chunkCount} chunks)`,
+        agent: profile.agent,
+        role: profile.role,
+        message: 'Response complete',
+        details: `${fullResponse.length} chars, ${chunkCount} chunks`,
         status: 'completed',
+        taskType,
       });
       
       console.log('\n');
@@ -926,8 +1062,12 @@ export class OMKREPL {
       const errorMsg = err instanceof Error ? err.message : String(err);
       logger.addActivity({
         type: 'error',
-        message: `Failed: ${errorMsg}`,
+        agent: profile.agent,
+        role: profile.role,
+        message: 'Response failed',
+        details: errorMsg,
         status: 'failed',
+        taskType,
       });
       console.error('\n[ERROR] Chat failed:', errorMsg);
     } finally {
@@ -1063,20 +1203,14 @@ export class OMKREPL {
 
   private showSkills(): void {
     console.log('\n\x1b[1mAvailable Skills:\x1b[0m\n');
-    
-    const categories: Record<string, string[]> = {
-      'Core': ['ralph', 'team', 'plan', 'deep-interview', 'autopilot', 'cancel'],
-      'Code Quality': ['code-review', 'security-review', 'analyze', 'build-fix'],
-      'Development': ['tdd', 'git-master'],
-      'Visual': ['visual-verdict'],
-      'Utils': ['help'],
-    };
 
-    for (const [category, skills] of Object.entries(categories)) {
-      console.log(`\x1b[33m${category}:\x1b[0m`);
-      for (const skill of skills) {
-        console.log(`  $${skill}`);
-      }
+    if (this.availableSkills.length === 0) {
+      console.log('No skills installed. Run omk setup to install built-in skills.\n');
+      return;
+    }
+
+    for (const skill of this.availableSkills) {
+      console.log(`  $${skill}`);
     }
     console.log('');
   }
@@ -1442,7 +1576,6 @@ export class OMKREPL {
 
   private showMemory(): void {
     try {
-      const { getMemoryTools } = require('../tools/memory.js');
       const memory = getMemoryTools(this.cwd);
       const info = memory.readMemory() as any;
       

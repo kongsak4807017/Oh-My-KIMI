@@ -3,8 +3,9 @@
  * Full-featured CLI interface with real-time updates
  */
 
-import React, { useState, useEffect, type Key } from 'react';
+import React, { useState, useEffect } from 'react';
 import { Box, Text, useApp, useInput, useStdout } from 'ink';
+import { resolveExecutionProfile } from '../orchestration/phase-map.js';
 // Simple spinner component since ink-spinner has compatibility issues
 const Spinner = ({ type = 'dots' }: { type?: string }) => {
   const [frame, setFrame] = useState(0);
@@ -24,6 +25,7 @@ import TextInput from 'ink-text-input';
 import { Header } from './components/Header.js';
 import { Footer } from './components/Footer.js';
 import { AgentPanel } from './components/AgentPanel.js';
+import { StatusHud } from './components/StatusHud.js';
 import { ProviderManager } from '../providers/index.js';
 import { Agent, Activity } from './types.js';
 
@@ -46,12 +48,13 @@ export const OMKApp: React.FC<TUIProps> = ({
   // State
   const [input, setInput] = useState('');
   const [mode, setMode] = useState<'chat' | 'plan' | 'agent'>('chat');
-  const [showAgents, setShowAgents] = useState(false);
+  const [showAgents, setShowAgents] = useState(true);
   const [contextUsage, setContextUsage] = useState({ used: 0, total: 262144, percentage: 0 });
   const [isProcessing, setIsProcessing] = useState(false);
   const [messages, setMessages] = useState<Array<{ role: 'user' | 'assistant' | 'system'; content: string; timestamp: Date }>>([]);
   const [agents, setAgents] = useState<Agent[]>([]);
   const [activities, setActivities] = useState<Activity[]>([]);
+  const [currentAgent, setCurrentAgent] = useState({ agent: 'idle', role: 'system', phase: 'waiting', task: 'Ready for input' });
   
   // Terminal dimensions
   const [dimensions, setDimensions] = useState({ 
@@ -80,6 +83,15 @@ export const OMKApp: React.FC<TUIProps> = ({
       id: Date.now().toString(),
       timestamp: new Date(),
     }]);
+  };
+
+  const detectTaskType = (text: string) => {
+    const lower = text.toLowerCase();
+    if (lower.includes('http') || lower.includes('github') || lower.includes('clone')) return 'repository-analysis';
+    if (lower.includes('plan')) return 'planning';
+    if (lower.includes('fix') || lower.includes('bug') || lower.includes('error')) return 'debugging';
+    if (lower.includes('refactor')) return 'refactoring';
+    return 'general-chat';
   };
   
   // Keyboard handlers
@@ -127,16 +139,33 @@ export const OMKApp: React.FC<TUIProps> = ({
     try {
       const provider = providerManager.getProvider();
       let response = '';
+      const taskType = detectTaskType(text);
+      const profile = resolveExecutionProfile({ taskType, cwd });
+      const routerPhases = ['routing', 'handoff', 'complete'];
+      const contextPhases = ['context', 'prompt-prep', 'complete'];
+      const workerPhases = profile.phases;
+      setCurrentAgent({ agent: 'router', role: 'dispatcher', phase: 'routing', task: text });
+      setAgents([
+        { id: 'router', name: 'router', role: 'dispatcher', status: 'completed', phase: 'routing', currentStep: 1, totalSteps: routerPhases.length, task: 'Routed the request to the best lane' },
+        { id: 'context', name: 'context', role: 'workspace', status: 'running', phase: 'context', currentStep: 1, totalSteps: contextPhases.length, task: 'Loading AGENTS.md and local context' },
+        { id: profile.agent, name: profile.agent, role: profile.role, status: 'waiting', phase: workerPhases[0], currentStep: 1, totalSteps: workerPhases.length, task: profile.task },
+      ]);
+      addActivity({ type: 'agent', message: `router -> ${profile.agent}`, status: 'completed', agentName: 'router', role: 'dispatcher', phase: 'routing' });
       
-      // Simulate agent activity
-      if (text.includes('plan') || text.includes('phase')) {
-        setAgents([
-          { id: '1', name: 'Lorentz', role: 'explorer', status: 'running', task: 'Analyzing codebase' },
-          { id: '2', name: 'Curie', role: 'planner', status: 'waiting', task: 'Waiting for analysis' },
-        ]);
-      }
+      setCurrentAgent({ agent: 'context', role: 'workspace', phase: 'context', task: 'Loading workspace instructions' });
+      addActivity({ type: 'agent', message: 'Loaded workspace instructions', status: 'completed', agentName: 'context', role: 'workspace', phase: 'context' });
       
       // Stream response
+      setAgents(prev => prev.map(agent =>
+        agent.id === 'context'
+          ? { ...agent, status: 'completed', phase: 'prompt-prep', currentStep: 2, task: 'Workspace context ready' }
+          : agent.id === profile.agent
+            ? { ...agent, status: 'running', phase: workerPhases[Math.min(2, workerPhases.length - 1)], currentStep: Math.min(3, workerPhases.length) }
+            : agent
+      ));
+      setCurrentAgent({ agent: profile.agent, role: profile.role, phase: workerPhases[Math.min(2, workerPhases.length - 1)], task: profile.task });
+      addActivity({ type: 'agent', message: `${profile.agent} is ${profile.task}`, status: 'running', agentName: profile.agent, role: profile.role, phase: workerPhases[Math.min(2, workerPhases.length - 1)] });
+
       for await (const chunk of provider.stream({
         messages: [
           { role: 'system', content: 'You are OMK, a helpful AI assistant.' },
@@ -160,13 +189,23 @@ export const OMKApp: React.FC<TUIProps> = ({
       // Add assistant message
       setMessages(prev => [...prev, { role: 'assistant', content: response, timestamp: new Date() }]);
       addActivity({ type: 'assistant', message: 'Response complete', status: 'completed' });
+      setCurrentAgent({ agent: profile.agent, role: profile.role, phase: 'complete', task: 'Finished the response' });
       
-      // Clear agents
-      setAgents([]);
+      setAgents(prev => prev.map(agent =>
+        agent.id === profile.agent
+          ? { ...agent, status: 'completed', phase: 'complete', currentStep: workerPhases.length, totalSteps: workerPhases.length, task: 'Response streamed successfully' }
+          : agent.id === 'router'
+            ? { ...agent, phase: 'complete', currentStep: routerPhases.length, totalSteps: routerPhases.length }
+            : agent.id === 'context'
+              ? { ...agent, phase: 'complete', currentStep: contextPhases.length, totalSteps: contextPhases.length }
+              : agent
+      ));
+      addActivity({ type: 'agent', message: `${profile.agent} completed ${profile.task}`, status: 'completed', agentName: profile.agent, role: profile.role, phase: 'complete' });
       
     } catch (err) {
       const errorMsg = err instanceof Error ? err.message : String(err);
       addActivity({ type: 'system', message: `Error: ${errorMsg}`, status: 'error' });
+      setCurrentAgent({ agent: 'system', role: 'error', phase: 'failed', task: errorMsg });
       setMessages(prev => [...prev, { 
         role: 'system', 
         content: `[ERROR] ${errorMsg}`, 
@@ -200,6 +239,13 @@ export const OMKApp: React.FC<TUIProps> = ({
           flexDirection="column" 
           paddingX={1}
         >
+          <StatusHud
+            agent={currentAgent.agent}
+            role={currentAgent.role}
+            phase={currentAgent.phase}
+            task={currentAgent.task}
+          />
+
           {/* Messages */}
           <Box flexDirection="column" flexGrow={1} overflow="hidden">
             {messages.slice(-(mainHeight - 5)).map((msg, idx) => (
@@ -221,7 +267,7 @@ export const OMKApp: React.FC<TUIProps> = ({
                 <Text color="yellow">
                   <Spinner type="dots" />
                 </Text>
-                <Text color="yellow"> Processing...</Text>
+                <Text color="yellow"> {currentAgent.agent} [{currentAgent.phase}]</Text>
               </Box>
             )}
           </Box>

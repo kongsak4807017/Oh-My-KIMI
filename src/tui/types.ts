@@ -9,6 +9,9 @@ export interface Agent {
   status: 'idle' | 'running' | 'waiting' | 'completed' | 'error';
   task?: string;
   progress?: number;
+  phase?: string;
+  currentStep?: number;
+  totalSteps?: number;
 }
 
 export interface Activity {
@@ -18,6 +21,8 @@ export interface Activity {
   status: 'running' | 'waiting' | 'completed' | 'error' | 'info';
   timestamp: Date;
   agentName?: string;
+  role?: string;
+  phase?: string;
 }
 
 export interface ContextUsage {

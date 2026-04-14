@@ -7,15 +7,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.2.0] - 2025-04-14
+
 ### Added
-- Initial release
-- 36 built-in skills
-- Interactive REPL with streaming
-- Team mode with tmux support
-- MCP (Model Context Protocol) server
-- Plugin system for extensibility
-- State persistence
-- Session management
+- IDE-style interactive autocomplete with tab completion and file browser
+- Session management (/sessions, /title, auto-save)
+- Level 3 Token Optimization (smart context compression, semantic caching)
+- Large codebase support (/index, /map, /search)
+- Activity logger with real-time HUD
+- Skill runtime with keyword auto-detection
+- GSD (Get Shit Done) executor for spec-driven development
+- Execution profile routing (agent/role/phase mapping)
+
+### Changed
+- Refactored CLI setup to use shared skill runtime
+- Improved TUI agent panel and status HUD
+- Updated provider manager initialization flow
+
+### Fixed
+- LF/CRLF line ending warnings on Windows
+- Skill loading now falls back correctly from local to global skills
+
+## [0.1.0] - 2025-04-11
 
 ## [0.1.0] - 2025-04-11
 
@@ -126,5 +139,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Zod for validation
 - Built-in testing with Node.js test runner
 
-[Unreleased]: https://github.com/yourusername/oh-my-kimi/compare/v0.1.0...HEAD
-[0.1.0]: https://github.com/yourusername/oh-my-kimi/releases/tag/v0.1.0
+[Unreleased]: https://github.com/kongsak4807017/oh-my-kimi/compare/v0.2.0...HEAD
+[0.2.0]: https://github.com/kongsak4807017/oh-my-kimi/releases/tag/v0.2.0
+[0.1.0]: https://github.com/kongsak4807017/oh-my-kimi/releases/tag/v0.1.0
