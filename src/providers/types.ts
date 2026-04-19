@@ -1,16 +1,24 @@
 /**
- * Provider Types for OMK
- * Supports multiple Kimi connection methods
+ * Provider Types for OMK.
+ * API providers are OpenAI-compatible by default, with presets for Kimi,
+ * OpenRouter, and user-supplied custom gateways.
  */
 
-export type ProviderType = 'api' | 'browser' | 'cli' | 'auto';
+export type ProviderType = 'api' | 'kimi' | 'openrouter' | 'custom' | 'browser' | 'cli' | 'auto';
+
+export type ReasoningEffort = 'low' | 'medium' | 'high';
 
 export interface ProviderConfig {
   type: ProviderType;
-  // API mode
+  // API mode (OpenAI-compatible)
   apiKey?: string;
+  apiKeyEnv?: string;
   baseUrl?: string;
   model?: string;
+  headers?: Record<string, string>;
+  siteUrl?: string;
+  appName?: string;
+  providerName?: string;
   // Browser mode
   headless?: boolean;
   browserType?: 'chromium' | 'firefox' | 'webkit';
@@ -18,12 +26,33 @@ export interface ProviderConfig {
   cliPath?: string;
   // Common
   timeout?: number;
-  reasoning?: 'low' | 'medium' | 'high';
+  reasoning?: ReasoningEffort;
 }
 
 export interface ChatMessage {
-  role: 'system' | 'user' | 'assistant';
+  role: 'system' | 'user' | 'assistant' | 'tool';
   content: string;
+  name?: string;
+  tool_call_id?: string;
+  tool_calls?: ToolCall[];
+}
+
+export interface ChatTool {
+  type: 'function';
+  function: {
+    name: string;
+    description?: string;
+    parameters: Record<string, unknown>;
+  };
+}
+
+export interface ToolCall {
+  id: string;
+  type: 'function';
+  function: {
+    name: string;
+    arguments: string;
+  };
 }
 
 export interface ChatOptions {
@@ -31,11 +60,16 @@ export interface ChatOptions {
   stream?: boolean;
   temperature?: number;
   maxTokens?: number;
-  reasoning?: 'low' | 'medium' | 'high';
+  reasoning?: ReasoningEffort;
+  model?: string;
+  tools?: ChatTool[];
+  toolChoice?: 'auto' | 'none' | Record<string, unknown>;
 }
 
 export interface ChatResponse {
   content: string;
+  toolCalls?: ToolCall[];
+  finishReason?: string;
   usage?: {
     promptTokens: number;
     completionTokens: number;

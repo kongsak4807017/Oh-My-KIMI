@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 
-// Oh-my-KIMI CLI entry point
+// OMK CLI entry point
 // Requires compiled JavaScript output in dist/
 
 import { fileURLToPath, pathToFileURL } from 'url';
@@ -19,6 +19,6 @@ if (existsSync(distEntry)) {
   await main(process.argv.slice(2));
   process.exit(process.exitCode ?? 0);
 } else {
-  console.error('oh-my-kimi: run "npm run build" first');
+  console.error('omk: run "npm run build" first');
   process.exit(1);
 }

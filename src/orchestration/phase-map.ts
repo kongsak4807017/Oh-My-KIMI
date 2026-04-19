@@ -35,7 +35,7 @@ const TASK_PROFILES: Record<string, ExecutionProfile> = {
   debugging: { key: 'debugging', agent: 'debugger', role: 'debugger', task: 'tracing the root cause', phases: ['routing', 'context', 'diagnose', 'patch', 'verify', 'complete'], source: 'builtin' },
   planning: { key: 'planning', agent: 'planner', role: 'planner', task: 'mapping the work', phases: ['routing', 'context', 'analyze', 'draft-plan', 'review', 'complete'], source: 'builtin' },
   refactoring: { key: 'refactoring', agent: 'executor', role: 'executor', task: 'reshaping the implementation', phases: ['routing', 'context', 'inspect', 'refactor', 'verify', 'complete'], source: 'builtin' },
-  'general-chat': { key: 'general-chat', agent: 'kimi', role: 'assistant', task: 'answering with project context', phases: ['routing', 'context', 'analyze', 'respond', 'complete'], source: 'builtin' },
+  'general-chat': { key: 'general-chat', agent: 'provider', role: 'assistant', task: 'answering with project context', phases: ['routing', 'context', 'analyze', 'respond', 'complete'], source: 'builtin' },
 };
 
 const PHASE_SECTION_HEADERS = [

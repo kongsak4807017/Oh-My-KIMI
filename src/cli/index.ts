@@ -1,6 +1,6 @@
 /**
- * oh-my-kimi CLI
- * Multi-agent orchestration for Kimi AI
+ * OMK CLI
+ * Provider-backed multi-agent orchestration
  */
 
 import React from 'react';
@@ -8,6 +8,7 @@ import { existsSync, mkdirSync, readFileSync, writeFileSync, rmSync } from 'fs';
 import { join, dirname, basename } from 'path';
 import { homedir } from 'os';
 import { fileURLToPath } from 'url';
+import TOML from '@iarna/toml';
 import {
   buildSkillSystemPrompt,
   copySkillTree,
@@ -16,6 +17,9 @@ import {
   loadSkillContent,
   stripCliFlags,
 } from '../skills/runtime.js';
+import { launchPassthrough, launchInteractiveShell } from './passthrough.js';
+import { loadOMKConfig, parseHeaderFlags, resolveProviderConfig } from '../config.js';
+import { getProviderManager } from '../providers/manager.js';
 
 // Types
 export type CliCommand = 
@@ -29,17 +33,20 @@ export type CliCommand =
   | "deep-interview"
   | "autopilot"
   | "cancel"
+  | "config"
   | "help"
   | "version"
   | string;
 
 // Constants
 const HELP = `
-oh-my-kimi (omk) - Multi-agent orchestration for Kimi AI
+OMK (omk) - provider-backed multi-agent orchestration
 
 Usage:
-  omk                    Launch Kimi interactive session
+  omk                    Launch OMK interactive session
   omk --tui              Launch TUI mode (full UI with agents panel)
+  omk --passthrough      Run Kimi CLI directly with OMK context (no HUD)
+  omk --shell            Launch native Kimi CLI interactive shell
   omk setup              Install skills, prompts, and AGENTS.md scaffolding
   omk doctor             Check installation health
   omk uninstall          Remove OMK configuration
@@ -49,28 +56,48 @@ Usage:
   omk deep-interview     Socratic requirements clarification
   omk autopilot "<task>" Full autonomous pipeline
   omk cancel             Cancel active execution modes
+  omk config             Show effective provider config
+  omk config init <type> Write provider config (openrouter, custom, api, kimi)
+  omk "<prompt>"         Run one-shot prompt and print the response
   omk help               Show this help message
   omk version            Show version information
 
 Options:
-  --provider <type>      Kimi provider: api, browser, cli, auto (default: auto)
+  --provider <type>      Provider: api, kimi, openrouter, custom, browser, cli, auto
   --api                  Shortcut for --provider=api
+  --openrouter           Shortcut for --provider=openrouter
+  --custom               Shortcut for --provider=custom
   --browser              Shortcut for --provider=browser (uses subscription)
   --cli                  Shortcut for --provider=cli
+  --base-url <url>       Override API base URL
+  --api-key-env <name>   Read API key from a specific environment variable
+  --header <k=v>         Add API header (repeatable)
+  --global               Write global config for config commands
   --high                 Use high reasoning effort
   --yolo                 Bypass confirmations (dangerous)
   --tui                  Use TUI mode (full terminal UI)
+  --passthrough          Run Kimi CLI directly with OMK context (no HUD/wrapper)
+  --shell                Launch native Kimi CLI interactive shell
   --force                Force reinstall
   --dry-run              Show what would be done
   --verbose              Show detailed output
 
 Environment Variables:
-  KIMI_API_KEY           Your Moonshot AI API key (for --provider=api)
-  KIMI_BASE_URL          API base URL (default: https://api.moonshot.cn/v1)
-  OMK_MODEL              Default model (default: kimi-k2-0711-preview)
+  OMK_API_KEY            Generic OpenAI-compatible API key
+  OMK_API_BASE_URL       Generic API base URL
+  OMK_MODEL              Default model
+  OPENROUTER_API_KEY     OpenRouter API key
+  OPENROUTER_MODEL       OpenRouter model (for example openai/gpt-4o-mini)
+  CUSTOM_API_KEY         Custom OpenAI-compatible API key
+  CUSTOM_API_BASE_URL    Custom API base URL
+  CUSTOM_API_MODEL       Custom API model
+  KIMI_API_KEY           Backwards-compatible Moonshot/Kimi API key
 
 Provider Modes:
-  api                    Use Kimi API (requires KIMI_API_KEY)
+  api                    Use generic OpenAI-compatible API
+  kimi                   Use Kimi/Moonshot API preset
+  openrouter             Use OpenRouter
+  custom                 Use custom OpenAI-compatible API
   browser                Use Kimi web interface (uses your subscription, free!)
   cli                    Use official Kimi CLI (if installed)
   auto                   Auto-detect best available (default)
@@ -102,6 +129,42 @@ function getOmkPath(): string {
 
 function getGlobalOmkPath(): string {
   return OMK_CONFIG_DIR;
+}
+
+function getConfigPath(global: boolean): string {
+  return global
+    ? join(getGlobalOmkPath(), 'config.toml')
+    : join(getOmkPath(), 'config.toml');
+}
+
+function readConfigForWrite(path: string): Record<string, any> {
+  if (!existsSync(path)) return {};
+  return TOML.parse(readFileSync(path, 'utf-8')) as Record<string, any>;
+}
+
+function writeConfig(path: string, config: Record<string, any>): void {
+  ensureDir(dirname(path));
+  writeFileSync(path, TOML.stringify(config as any));
+}
+
+function setNestedValue(target: Record<string, any>, key: string, value: string): void {
+  const parts = key.split('.').filter(Boolean);
+  if (parts.length === 0) throw new Error('Config key is required');
+  let cursor = target;
+  for (const part of parts.slice(0, -1)) {
+    if (!cursor[part] || typeof cursor[part] !== 'object') cursor[part] = {};
+    cursor = cursor[part];
+  }
+  cursor[parts[parts.length - 1]] = value;
+}
+
+function getNestedValue(target: Record<string, any>, key: string): unknown {
+  let cursor: any = target;
+  for (const part of key.split('.').filter(Boolean)) {
+    if (!cursor || typeof cursor !== 'object') return undefined;
+    cursor = cursor[part];
+  }
+  return cursor;
 }
 
 /**
@@ -205,8 +268,8 @@ async function setup(options: { force: boolean; dryRun: boolean; verbose: boolea
 
   console.log('\nOMK setup complete!');
   console.log('\nNext steps:');
-  console.log('  1. Set your KIMI_API_KEY environment variable');
-  console.log('  2. Run: omk --high');
+  console.log('  1. Set an API key (OPENROUTER_API_KEY, OMK_API_KEY, CUSTOM_API_KEY, or KIMI_API_KEY)');
+  console.log('  2. Run: omk --provider openrouter --model <provider/model>');
   console.log('  3. Try: $ralph "your task here"');
 }
 
@@ -220,7 +283,7 @@ function generateAgentsTemplate(): string {
   const templatePath = join(pkgRoot, 'templates', 'AGENTS.md');
   const template = existsSync(templatePath)
     ? readFileSync(templatePath, 'utf-8')
-    : '# Oh-my-KIMI - OMK Project\n';
+    : '# OMK Project\n';
 
   return template.replaceAll('{{PROJECT_NAME}}', basename(getProjectRoot()));
 }
@@ -240,11 +303,11 @@ async function doctor(): Promise<void> {
     checks.push({ name: 'Node.js', status: 'error', message: `${nodeVersion} (requires >=20)` });
   }
 
-  // Check API key
-  if (process.env.KIMI_API_KEY) {
-    checks.push({ name: 'KIMI_API_KEY', status: 'ok', message: 'Set' });
+  // Check API keys
+  if (process.env.OPENROUTER_API_KEY || process.env.OMK_API_KEY || process.env.CUSTOM_API_KEY || process.env.KIMI_API_KEY) {
+    checks.push({ name: 'API Key', status: 'ok', message: 'At least one provider key is set' });
   } else {
-    checks.push({ name: 'KIMI_API_KEY', status: 'warn', message: 'Not set - API mode unavailable, browser/cli may still work' });
+    checks.push({ name: 'API Key', status: 'warn', message: 'No API key set - browser/cli may still work' });
   }
 
   // Check .omk directory
@@ -302,22 +365,193 @@ async function uninstall(options: { dryRun: boolean; verbose: boolean }): Promis
 
 // Version command
 function version(): void {
-  console.log(`oh-my-kimi v${VERSION}`);
+  console.log(`omk v${VERSION}`);
+}
+
+async function configCommand(args: string[]): Promise<void> {
+  const flags = parseFlags(args);
+  const global = args.includes('--global');
+  const cleaned = stripCliFlags(args).filter(arg => arg !== '--global');
+  const action = cleaned[0] ?? 'show';
+  const configPath = getConfigPath(global);
+
+  if (action === 'path') {
+    console.log(configPath);
+    return;
+  }
+
+  if (action === 'show') {
+    const effective = loadOMKConfig(process.cwd());
+    const resolved = resolveProviderConfig({
+      type: flags.provider as any,
+      model: flags.model,
+      baseUrl: flags.baseUrl,
+      apiKeyEnv: flags.apiKeyEnv,
+      headers: flags.headers,
+    }, process.cwd());
+
+    console.log('Effective config:');
+    console.log(TOML.stringify(effective as any).trim() || '(empty)');
+    console.log('\nResolved provider:');
+    console.log(JSON.stringify({
+      type: resolved.type,
+      model: resolved.model,
+      baseUrl: resolved.baseUrl,
+      apiKeyEnv: resolved.apiKeyEnv,
+      headers: resolved.headers,
+      hasApiKey: Boolean(resolved.apiKey),
+    }, null, 2));
+    return;
+  }
+
+  if (action === 'get') {
+    const key = cleaned[1];
+    if (!key) throw new Error('Usage: omk config get <key>');
+    const value = getNestedValue(loadOMKConfig(process.cwd()) as any, key);
+    console.log(value === undefined ? '' : typeof value === 'string' ? value : JSON.stringify(value, null, 2));
+    return;
+  }
+
+  if (action === 'set') {
+    const key = cleaned[1];
+    const value = cleaned.slice(2).join(' ');
+    if (!key || !value) throw new Error('Usage: omk config set <key> <value> [--global]');
+    const config = readConfigForWrite(configPath);
+    setNestedValue(config, key, value);
+    writeConfig(configPath, config);
+    console.log(`Wrote ${key} to ${configPath}`);
+    return;
+  }
+
+  if (action === 'init') {
+    const provider = cleaned[1] ?? flags.provider ?? 'openrouter';
+    const config = readConfigForWrite(configPath);
+    config.provider = provider;
+    if (flags.reasoning) config.reasoning = flags.reasoning;
+    config.providers ??= {};
+    config.providers[provider] ??= {};
+
+    const providerConfig = config.providers[provider];
+    if (flags.model) {
+      config.model = flags.model;
+      providerConfig.model = flags.model;
+    }
+    if (flags.baseUrl) providerConfig.baseUrl = flags.baseUrl;
+    if (flags.apiKeyEnv) providerConfig.apiKeyEnv = flags.apiKeyEnv;
+    if (flags.headers && Object.keys(flags.headers).length > 0) {
+      providerConfig.headers = {
+        ...(providerConfig.headers ?? {}),
+        ...flags.headers,
+      };
+    }
+
+    if (provider === 'openrouter') {
+      providerConfig.baseUrl ??= 'https://openrouter.ai/api/v1';
+      providerConfig.apiKeyEnv ??= 'OPENROUTER_API_KEY';
+      providerConfig.model ??= flags.model ?? process.env.OPENROUTER_MODEL ?? 'openai/gpt-4o-mini';
+      config.model ??= providerConfig.model;
+    } else if (provider === 'custom') {
+      providerConfig.baseUrl ??= flags.baseUrl ?? process.env.CUSTOM_API_BASE_URL ?? 'http://localhost:1234/v1';
+      providerConfig.apiKeyEnv ??= flags.apiKeyEnv ?? 'CUSTOM_API_KEY';
+      providerConfig.model ??= flags.model ?? process.env.CUSTOM_API_MODEL ?? 'local-model';
+      config.model ??= providerConfig.model;
+    } else if (provider === 'kimi') {
+      providerConfig.baseUrl ??= 'https://api.moonshot.cn/v1';
+      providerConfig.apiKeyEnv ??= 'KIMI_API_KEY';
+      providerConfig.model ??= flags.model ?? process.env.KIMI_MODEL ?? 'kimi-k2-0711-preview';
+      config.model ??= providerConfig.model;
+    } else if (provider === 'api') {
+      providerConfig.apiKeyEnv ??= flags.apiKeyEnv ?? 'OMK_API_KEY';
+      if (flags.baseUrl) providerConfig.baseUrl = flags.baseUrl;
+      if (flags.model) providerConfig.model = flags.model;
+    } else {
+      throw new Error(`Unsupported config init provider: ${provider}`);
+    }
+
+    writeConfig(configPath, config);
+    console.log(`Wrote ${provider} config to ${configPath}`);
+    if (providerConfig.apiKeyEnv) {
+      console.log(`Set ${providerConfig.apiKeyEnv} in your environment before running OMK.`);
+    }
+    return;
+  }
+
+  throw new Error(`Unknown config action: ${action}`);
+}
+
+async function oneShot(args: string[]): Promise<void> {
+  const flags = parseFlags(args);
+  const prompt = stripCliFlags(args).join(' ').trim();
+  if (!prompt) throw new Error('Usage: omk "<prompt>" [--openrouter|--custom|--provider <type>]');
+
+  const providerManager = getProviderManager();
+  await providerManager.initialize({
+    type: (flags.provider as any) || 'auto',
+    model: flags.model,
+    baseUrl: flags.baseUrl,
+    apiKeyEnv: flags.apiKeyEnv,
+    headers: flags.headers,
+    reasoning: (flags.reasoning as any) || 'medium',
+  });
+
+  const provider = providerManager.getProvider();
+  let output = '';
+
+  for await (const chunk of provider.stream({
+    messages: [{ role: 'user', content: prompt }],
+    model: flags.model,
+    reasoning: flags.reasoning as any,
+  })) {
+    if (chunk.content) {
+      process.stdout.write(chunk.content);
+      output += chunk.content;
+    }
+    if (chunk.done) break;
+  }
+
+  if (!output.trim()) {
+    const response = await provider.chat({
+      messages: [{ role: 'user', content: prompt }],
+      model: flags.model,
+      reasoning: flags.reasoning as any,
+    });
+    output = response.content || '';
+    if (output) process.stdout.write(output);
+  }
+
+  if (!output.trim()) {
+    console.error('No response content returned by provider. Check model/provider config with: omk config show');
+    process.exitCode = 1;
+  } else if (!output.endsWith('\n')) {
+    process.stdout.write('\n');
+  }
 }
 
 // Launch command (main entry)
 async function launch(args: string[]): Promise<void> {
   const flags = parseFlags(args);
   
+  if (flags.provider === 'openrouter' && !process.env.OPENROUTER_API_KEY && !flags.apiKeyEnv) {
+    console.error('Error: OPENROUTER_API_KEY required for OpenRouter mode');
+    console.error('   Set it with: export OPENROUTER_API_KEY=your_key');
+    process.exit(1);
+  }
+
+  if (flags.provider === 'custom' && !process.env.CUSTOM_API_KEY && !process.env.OMK_API_KEY && !flags.apiKeyEnv) {
+    console.error('Error: CUSTOM_API_KEY or OMK_API_KEY required for custom API mode');
+    console.error('   Also set CUSTOM_API_BASE_URL and CUSTOM_API_MODEL, or pass --base-url and --model');
+    process.exit(1);
+  }
+
   // Check prerequisites based on provider
-  if (flags.provider === 'api' && !process.env.KIMI_API_KEY) {
-    console.error('❌ Error: KIMI_API_KEY required for API mode');
+  if (flags.provider === 'kimi' && !process.env.KIMI_API_KEY) {
+    console.error('Error: KIMI_API_KEY required for Kimi preset mode');
     console.error('   Set it with: export KIMI_API_KEY=your_key');
     console.error('   Or use: omk --browser (subscription mode, free!)');
     process.exit(1);
   }
   
-  console.log('>> Launching Oh-my-KIMI...');
+  console.log('>> Launching OMK...');
   
   // Show Root Agent status
   if (isUsingGlobalFallback()) {
@@ -333,10 +567,20 @@ async function launch(args: string[]): Promise<void> {
   
   // Show provider hint
   if (!flags.provider || flags.provider === 'auto') {
-    if (!process.env.KIMI_API_KEY) {
-      console.log('\n[INFO] No API key found. Will try browser mode (subscription)');
-      console.log('       Tip: Use --browser flag to connect via your Kimi subscription');
+    if (!process.env.OPENROUTER_API_KEY && !process.env.OMK_API_KEY && !process.env.CUSTOM_API_KEY && !process.env.KIMI_API_KEY) {
+      console.log('\n[INFO] No API key found. Configure an API provider first.');
+      console.log('       Run: omk config init openrouter --global --model <provider/model>');
     }
+  }
+
+  // Check for passthrough mode (native Kimi CLI experience)
+  if (args.includes('--passthrough') || args.includes('--raw')) {
+    await launchPassthrough(args);
+    return;
+  }
+  if (args.includes('--shell')) {
+    await launchInteractiveShell();
+    return;
   }
 
   // Check for TUI mode (only on supported terminals)
@@ -352,12 +596,16 @@ async function launch(args: string[]): Promise<void> {
       provider: flags.provider,
       reasoning: flags.reasoning,
       yolo: flags.yolo,
+      model: flags.model,
+      baseUrl: flags.baseUrl,
+      apiKeyEnv: flags.apiKeyEnv,
+      headers: flags.headers,
     });
   }
 }
 
 // TUI Launcher
-async function launchTUI(flags: { provider?: string; reasoning?: string; yolo?: boolean }): Promise<void> {
+async function launchTUI(flags: ReturnType<typeof parseFlags>): Promise<void> {
   const { render } = await import('ink');
   const { OMKApp } = await import('../tui/app.js');
   const { getProviderManager } = await import('../providers/manager.js');
@@ -367,8 +615,12 @@ async function launchTUI(flags: { provider?: string; reasoning?: string; yolo?: 
   // Initialize provider
   try {
     await providerManager.initialize({
-      type: (flags.provider as 'api' | 'browser' | 'cli' | 'auto') || 'auto',
+      type: (flags.provider as any) || 'auto',
       reasoning: (flags.reasoning as 'low' | 'medium' | 'high') || 'medium',
+      model: (flags as any).model,
+      baseUrl: (flags as any).baseUrl,
+      apiKeyEnv: (flags as any).apiKeyEnv,
+      headers: (flags as any).headers,
     });
   } catch (err) {
     console.error('Failed to initialize provider:', err);
@@ -393,15 +645,32 @@ function parseFlags(args: string[]): {
   yolo?: boolean; 
   high?: boolean;
   model?: string;
+  baseUrl?: string;
+  apiKeyEnv?: string;
+  headers?: Record<string, string>;
   reasoning?: string;
   provider?: string;
+  global?: boolean;
 } {
-  const flags: { yolo?: boolean; high?: boolean; model?: string; reasoning?: string; provider?: string } = {};
+  const flags: {
+    yolo?: boolean;
+    high?: boolean;
+    model?: string;
+    baseUrl?: string;
+    apiKeyEnv?: string;
+    headers?: Record<string, string>;
+    reasoning?: string;
+    provider?: string;
+    global?: boolean;
+  } = {};
+  const headerValues: string[] = [];
   
   for (let i = 0; i < args.length; i++) {
     const arg = args[i];
     if (arg === '--yolo') {
       flags.yolo = true;
+    } else if (arg === '--global') {
+      flags.global = true;
     } else if (arg === '--high') {
       flags.high = true;
       flags.reasoning = 'high';
@@ -413,6 +682,12 @@ function parseFlags(args: string[]): {
       i++;
     } else if (arg === '--api') {
       flags.provider = 'api';
+    } else if (arg === '--kimi') {
+      flags.provider = 'kimi';
+    } else if (arg === '--openrouter') {
+      flags.provider = 'openrouter';
+    } else if (arg === '--custom') {
+      flags.provider = 'custom';
     } else if (arg === '--browser') {
       flags.provider = 'browser';
     } else if (arg === '--cli') {
@@ -420,7 +695,20 @@ function parseFlags(args: string[]): {
     } else if (arg === '--model' && args[i + 1]) {
       flags.model = args[i + 1];
       i++;
+    } else if (arg === '--base-url' && args[i + 1]) {
+      flags.baseUrl = args[i + 1];
+      i++;
+    } else if (arg === '--api-key-env' && args[i + 1]) {
+      flags.apiKeyEnv = args[i + 1];
+      i++;
+    } else if (arg === '--header' && args[i + 1]) {
+      headerValues.push(args[i + 1]);
+      i++;
     }
+  }
+
+  if (headerValues.length > 0) {
+    flags.headers = parseHeaderFlags(headerValues);
   }
   
   return flags;
@@ -445,13 +733,35 @@ async function invokeSkill(skillName: string, args: string[]): Promise<void> {
   console.log(`Activating skill: ${resolvedSkill.skillName}`);
   console.log(`   Source: ${resolvedSkill.source}`);
 
+  const engineSkills = new Set([
+    'ralph', 'team', 'ultrawork', 'swarm', 'ultraqa',
+    'pipeline', 'autopilot', 'plan', 'ralplan', 'deep-interview',
+  ]);
+
+  if (engineSkills.has(resolvedSkill.skillName)) {
+    const { runEngine } = await import('../orchestration/index.js');
+    await runEngine(resolvedSkill.skillName, userInput ? [userInput] : [], process.cwd(), {
+      provider: providerFlags.provider as any,
+      model: providerFlags.model,
+      baseUrl: providerFlags.baseUrl,
+      apiKeyEnv: providerFlags.apiKeyEnv,
+      headers: providerFlags.headers,
+      reasoning: providerFlags.reasoning || 'medium',
+      yolo: providerFlags.yolo,
+    });
+    return;
+  }
+
   const { getProviderManager } = await import('../providers/manager.js');
   const providerManager = getProviderManager();
 
   await providerManager.initialize({
-    type: (providerFlags.provider as 'api' | 'browser' | 'cli' | 'auto') || 'auto',
+    type: (providerFlags.provider as any) || 'auto',
     reasoning: (providerFlags.reasoning as 'low' | 'medium' | 'high') || 'medium',
     model: providerFlags.model,
+    baseUrl: providerFlags.baseUrl,
+    apiKeyEnv: providerFlags.apiKeyEnv,
+    headers: providerFlags.headers,
   });
 
   const provider = providerManager.getProvider();
@@ -491,10 +801,14 @@ export async function main(args: string[]): Promise<void> {
   let command = args[0];
   let restArgs = args.slice(1);
   
-  // If first arg is a flag starting with --, treat as launch command
-  if (command && command.startsWith('--')) {
-    command = undefined as any;
-    restArgs = args;
+  if (command === '--version' || command === '-v' || command === '--help' || command === '-h') {
+    restArgs = [];
+  } else {
+    // If first arg is a flag starting with --, treat as launch command
+    if (command && command.startsWith('--')) {
+      command = undefined as any;
+      restArgs = args;
+    }
   }
   
   const flags = {
@@ -542,6 +856,9 @@ export async function main(args: string[]): Promise<void> {
       case 'cancel':
         await invokeSkill('cancel', restArgs);
         break;
+      case 'config':
+        await configCommand(restArgs);
+        break;
       case 'code-review':
         await invokeSkill('code-review', restArgs);
         break;
@@ -575,9 +892,7 @@ export async function main(args: string[]): Promise<void> {
         } else if (command && loadSkillContent(process.cwd(), command)) {
           await invokeSkill(command, restArgs);
         } else {
-          console.error(`Unknown command: ${command}`);
-          console.log(HELP);
-          process.exit(1);
+          await oneShot(args);
         }
     }
   } catch (err) {

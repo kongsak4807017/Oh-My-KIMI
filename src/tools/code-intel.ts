@@ -4,8 +4,8 @@
  */
 
 import { execSync } from 'child_process';
-import { readFileSync, existsSync } from 'fs';
-import { resolve, join, relative } from 'path';
+import { readFileSync, existsSync, readdirSync, statSync } from 'fs';
+import { resolve, relative, join, sep } from 'path';
 
 export interface DiagnosticsInput {
   file: string;
@@ -36,7 +36,53 @@ export class CodeIntelTools {
   private cwd: string;
 
   constructor(cwd: string = process.cwd()) {
-    this.cwd = cwd;
+    this.cwd = resolve(cwd);
+  }
+
+  private resolveInsideWorkspace(inputPath: string): string {
+    const fullPath = resolve(this.cwd, inputPath);
+    const rel = relative(this.cwd, fullPath);
+    if (rel === '' || (!rel.startsWith('..') && !rel.startsWith(`..${sep}`))) {
+      return fullPath;
+    }
+    throw new Error(`Path escapes workspace: ${inputPath}`);
+  }
+
+  private scanTextFiles(root: string, matchLine: (line: string, file: string) => boolean, maxResults: number): Array<{ file: string; line: number; content: string }> {
+    const results: Array<{ file: string; line: number; content: string }> = [];
+    const visit = (path: string): void => {
+      if (results.length >= maxResults) return;
+      const stat = statSync(path);
+      if (stat.isDirectory()) {
+        for (const entry of readdirSync(path, { withFileTypes: true })) {
+          if (entry.name === 'node_modules' || entry.name === '.git' || entry.name === '__pycache__') continue;
+          visit(join(path, entry.name));
+          if (results.length >= maxResults) break;
+        }
+        return;
+      }
+
+      if (!/\.(ts|tsx|js|jsx|mjs|cjs|json|md|txt)$/i.test(path) || stat.size > 2_000_000) return;
+
+      let content = '';
+      try {
+        content = readFileSync(path, 'utf-8');
+      } catch {
+        return;
+      }
+
+      const relPath = relative(this.cwd, path);
+      const lines = content.split(/\r?\n/);
+      for (let i = 0; i < lines.length; i++) {
+        if (matchLine(lines[i], relPath)) {
+          results.push({ file: relPath, line: i + 1, content: lines[i].trim() });
+          if (results.length >= maxResults) return;
+        }
+      }
+    };
+
+    visit(root);
+    return results;
   }
 
   /**
@@ -54,7 +100,7 @@ export class CodeIntelTools {
     errorCount: number;
     warningCount: number;
   } {
-    const fullPath = resolve(this.cwd, input.file);
+    const fullPath = this.resolveInsideWorkspace(input.file);
     
     try {
       // Run tsc --noEmit
@@ -124,7 +170,7 @@ export class CodeIntelTools {
       line: number;
     }>;
   } {
-    const fullPath = resolve(this.cwd, input.file);
+    const fullPath = this.resolveInsideWorkspace(input.file);
     
     if (!existsSync(fullPath)) {
       throw new Error(`File not found: ${input.file}`);
@@ -171,33 +217,11 @@ export class CodeIntelTools {
       content: string;
     }>;
   } {
-    const fullPath = resolve(this.cwd, input.path);
-    
-    try {
-      const pattern = `^(?:export\s+)?(?:function|class|interface|const|let|var)\s+${input.query}`;
-      const command = process.platform === 'win32'
-        ? `findstr /s /n /r /c:"${pattern}" "${fullPath}\\*" 2>nul`
-        : `grep -rn "${pattern}" "${fullPath}" 2>/dev/null | head -50`;
-
-      const output = execSync(command, { encoding: 'utf-8', cwd: this.cwd });
-      
-      const lines = output.split('\n').filter(l => l.trim());
-      const results = lines.map(line => {
-        const match = line.match(/^(.+):(\d+):(.*)$/);
-        if (match) {
-          return {
-            file: relative(this.cwd, match[1]),
-            line: parseInt(match[2], 10),
-            content: match[3].trim(),
-          };
-        }
-        return null;
-      }).filter(Boolean) as Array<{ file: string; line: number; content: string }>;
-
-      return { results };
-    } catch {
-      return { results: [] };
-    }
+    const fullPath = this.resolveInsideWorkspace(input.path);
+    const symbolPattern = new RegExp(`^(?:export\\s+)?(?:async\\s+)?(?:function|class|interface|const|let|var)\\s+${escapeRegExp(input.query)}\\b`);
+    return {
+      results: this.scanTextFiles(fullPath, (line) => symbolPattern.test(line.trim()), 50),
+    };
   }
 
   /**
@@ -210,32 +234,11 @@ export class CodeIntelTools {
       content: string;
     }>;
   } {
-    const fullPath = resolve(this.cwd, input.file);
-    
-    try {
-      const command = process.platform === 'win32'
-        ? `findstr /s /n /c:"${input.symbol}" "${this.cwd}\\*" 2>nul`
-        : `grep -rn "\\b${input.symbol}\\b" "${this.cwd}" --include="*.ts" --include="*.js" 2>/dev/null | head -100`;
-
-      const output = execSync(command, { encoding: 'utf-8', cwd: this.cwd });
-      
-      const lines = output.split('\n').filter(l => l.trim());
-      const references = lines.map(line => {
-        const match = line.match(/^(.+):(\d+):(.*)$/);
-        if (match) {
-          return {
-            file: relative(this.cwd, match[1]),
-            line: parseInt(match[2], 10),
-            content: match[3].trim(),
-          };
-        }
-        return null;
-      }).filter(Boolean) as Array<{ file: string; line: number; content: string }>;
-
-      return { references };
-    } catch {
-      return { references: [] };
-    }
+    this.resolveInsideWorkspace(input.file);
+    const symbolPattern = new RegExp(`\\b${escapeRegExp(input.symbol)}\\b`);
+    return {
+      references: this.scanTextFiles(this.cwd, (line) => symbolPattern.test(line), 100),
+    };
   }
 
   /**
@@ -256,6 +259,10 @@ export class CodeIntelTools {
     const result = this.workspaceSymbols({ query: pattern, path: input.path });
     return { matches: result.results };
   }
+}
+
+function escapeRegExp(value: string): string {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 }
 
 let tools: CodeIntelTools | null = null;

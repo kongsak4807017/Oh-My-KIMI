@@ -5,7 +5,8 @@
 
 import { env } from 'process';
 
-// API Configuration
+// API Configuration. Kept as KimiClient for backwards compatibility; it can
+// also point at any OpenAI-compatible gateway via OMK_API_* or CUSTOM_API_*.
 const DEFAULT_BASE_URL = 'https://api.moonshot.cn/v1';
 const DEFAULT_MODEL = 'kimi-k2-0711-preview';
 
@@ -104,13 +105,13 @@ export class KimiClient {
     baseUrl?: string; 
     model?: string;
   }) {
-    this.apiKey = options?.apiKey || env.KIMI_API_KEY || '';
-    this.baseUrl = options?.baseUrl || env.KIMI_BASE_URL || DEFAULT_BASE_URL;
-    this.defaultModel = options?.model || env.OMK_MODEL || DEFAULT_MODEL;
+    this.apiKey = options?.apiKey || env.OMK_API_KEY || env.CUSTOM_API_KEY || env.KIMI_API_KEY || '';
+    this.baseUrl = options?.baseUrl || env.OMK_API_BASE_URL || env.CUSTOM_API_BASE_URL || env.KIMI_BASE_URL || DEFAULT_BASE_URL;
+    this.defaultModel = options?.model || env.OMK_MODEL || env.CUSTOM_API_MODEL || env.KIMI_MODEL || DEFAULT_MODEL;
 
     if (!this.apiKey) {
       throw new KimiConfigError(
-        'KIMI_API_KEY is required. Set it as an environment variable or pass it to the constructor.'
+        'An API key is required. Set OMK_API_KEY, CUSTOM_API_KEY, KIMI_API_KEY, or pass apiKey to the constructor.'
       );
     }
   }

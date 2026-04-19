@@ -115,8 +115,8 @@ export class OMKMCPServer {
 
   private handleInitialize(id: number | string): MCPResponse {
     const serverInfo: MCPServerInfo = {
-      name: 'oh-my-kimi',
-      version: '0.1.0',
+      name: 'omk',
+      version: '0.2.0',
       capabilities: {
         resources: {
           subscribe: false,

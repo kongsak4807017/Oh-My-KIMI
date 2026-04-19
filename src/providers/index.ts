@@ -1,6 +1,6 @@
 /**
  * OMK Providers
- * Multiple ways to connect to Kimi AI
+ * Multiple ways to connect to model providers
  */
 
 export { ProviderManager, getProviderManager, resetProviderManager } from './manager.js';

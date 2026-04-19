@@ -4,8 +4,7 @@
  */
 
 import { readFileSync, writeFileSync, readdirSync, statSync, existsSync, mkdirSync } from 'fs';
-import { join, relative, resolve, dirname } from 'path';
-import { execSync } from 'child_process';
+import { join, relative, resolve, dirname, sep } from 'path';
 
 export interface ReadFileInput {
   path: string;
@@ -34,11 +33,20 @@ export class FileSystemTools {
   private cwd: string;
 
   constructor(cwd: string = process.cwd()) {
-    this.cwd = cwd;
+    this.cwd = resolve(cwd);
+  }
+
+  private resolveInsideWorkspace(inputPath: string): string {
+    const fullPath = resolve(this.cwd, inputPath);
+    const rel = relative(this.cwd, fullPath);
+    if (rel === '' || (!rel.startsWith('..') && !rel.startsWith(`..${sep}`))) {
+      return fullPath;
+    }
+    throw new Error(`Path escapes workspace: ${inputPath}`);
   }
 
   readFile(input: ReadFileInput): { content: string; size: number; truncated: boolean } {
-    const fullPath = resolve(this.cwd, input.path);
+    const fullPath = this.resolveInsideWorkspace(input.path);
     
     if (!existsSync(fullPath)) {
       throw new Error(`File not found: ${input.path}`);
@@ -67,7 +75,7 @@ export class FileSystemTools {
   }
 
   writeFile(input: WriteFileInput): { success: boolean; path: string; bytesWritten: number } {
-    const fullPath = resolve(this.cwd, input.path);
+    const fullPath = this.resolveInsideWorkspace(input.path);
     
     const dir = dirname(fullPath);
     if (dir && !existsSync(dir)) {
@@ -88,7 +96,7 @@ export class FileSystemTools {
   }
 
   listDirectory(input: ListDirectoryInput): { entries: Array<{ name: string; type: 'file' | 'directory'; size?: number }>; path: string } {
-    const fullPath = resolve(this.cwd, input.path);
+    const fullPath = this.resolveInsideWorkspace(input.path);
     
     if (!existsSync(fullPath)) {
       throw new Error(`Directory not found: ${input.path}`);
@@ -145,47 +153,58 @@ export class FileSystemTools {
   }
 
   searchFiles(input: SearchFilesInput): { results: Array<{ file: string; line: number; content: string }>; total: number } {
-    const fullPath = resolve(this.cwd, input.path);
+    const fullPath = this.resolveInsideWorkspace(input.path);
     
     if (!existsSync(fullPath)) {
       throw new Error(`Path not found: ${input.path}`);
     }
 
-    try {
-      let command: string;
-      const pattern = input.pattern.replace(/"/g, '\\"');
-      
-      if (process.platform === 'win32') {
-        // Windows fallback
-        command = `findstr /s /n /c:"${pattern}" "${fullPath}\\*" 2>nul`;
-      } else {
-        if (input.filePattern) {
-          command = `rg -n "${pattern}" "${fullPath}" --glob "${input.filePattern}" 2>/dev/null || grep -rn "${pattern}" "${fullPath}" --include="${input.filePattern}" 2>/dev/null`;
-        } else {
-          command = `rg -n "${pattern}" "${fullPath}" 2>/dev/null || grep -rn "${pattern}" "${fullPath}" 2>/dev/null`;
+    const results: Array<{ file: string; line: number; content: string }> = [];
+    const pattern = input.pattern;
+    const fileRegex = input.filePattern
+      ? new RegExp(`^${input.filePattern.replace(/[.+^${}()|[\]\\]/g, '\\$&').replace(/\*/g, '.*').replace(/\?/g, '.')}$`)
+      : null;
+
+    const visit = (path: string): void => {
+      if (results.length >= 50) return;
+      const stat = statSync(path);
+      if (stat.isDirectory()) {
+        for (const entry of readdirSync(path, { withFileTypes: true })) {
+          if (entry.name === 'node_modules' || entry.name === '.git' || entry.name === '__pycache__') continue;
+          visit(join(path, entry.name));
+          if (results.length >= 50) break;
         }
+        return;
       }
 
-      const output = execSync(command, { encoding: 'utf-8', cwd: this.cwd });
-      const lines = output.split('\n').filter(l => l.trim());
-      
-      const results = lines.slice(0, 50).map(line => {
-        const match = line.match(/^(.+):(\d+):(.*)$/);
-        if (match) {
-          return {
-            file: relative(this.cwd, match[1]),
-            line: parseInt(match[2], 10),
-            content: match[3].trim(),
-          };
-        }
-        return null;
-      }).filter(Boolean) as Array<{ file: string; line: number; content: string }>;
+      const relPath = relative(this.cwd, path);
+      if (fileRegex && !fileRegex.test(relPath) && !fileRegex.test(entryName(relPath))) return;
+      if (stat.size > 2_000_000) return;
 
-      return { results, total: lines.length };
-    } catch {
-      return { results: [], total: 0 };
-    }
+      let content = '';
+      try {
+        content = readFileSync(path, 'utf-8');
+      } catch {
+        return;
+      }
+
+      const lines = content.split(/\r?\n/);
+      for (let i = 0; i < lines.length; i++) {
+        if (lines[i].includes(pattern)) {
+          results.push({ file: relPath, line: i + 1, content: lines[i].trim() });
+          if (results.length >= 50) return;
+        }
+      }
+    };
+
+    visit(fullPath);
+    return { results, total: results.length };
   }
+}
+
+function entryName(path: string): string {
+  const parts = path.split(/[\\/]/);
+  return parts[parts.length - 1] ?? path;
 }
 
 let tools: FileSystemTools | null = null;

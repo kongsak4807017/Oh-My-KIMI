@@ -11,6 +11,7 @@ import {
 import { APIProvider } from './api-provider.js';
 import { BrowserProvider } from './browser-provider.js';
 import { CLIProvider } from './cli-provider.js';
+import { resolveProviderConfig } from '../config.js';
 
 export class ProviderManager {
   private providers: Map<ProviderType, Provider> = new Map();
@@ -20,6 +21,9 @@ export class ProviderManager {
   constructor() {
     // Register available providers
     this.providers.set('api', new APIProvider());
+    this.providers.set('kimi', new APIProvider('kimi'));
+    this.providers.set('openrouter', new APIProvider('openrouter'));
+    this.providers.set('custom', new APIProvider('custom'));
     this.providers.set('browser', new BrowserProvider());
     this.providers.set('cli', new CLIProvider());
   }
@@ -28,9 +32,9 @@ export class ProviderManager {
    * Initialize provider with config
    */
   async initialize(config: ProviderConfig): Promise<void> {
-    this.config = config;
+    this.config = resolveProviderConfig(config);
 
-    let providerType = config.type;
+    let providerType = this.config.type;
 
     // Auto-detect best provider
     if (providerType === 'auto') {
@@ -45,14 +49,9 @@ export class ProviderManager {
 
     // Prepare config for specific provider
     const providerConfig: ProviderConfig = {
-      ...config,
+      ...this.config,
       type: providerType,
     };
-
-    // Add API key from environment if using API mode
-    if (providerType === 'api' && !providerConfig.apiKey) {
-      providerConfig.apiKey = process.env.KIMI_API_KEY;
-    }
 
     await provider.initialize(providerConfig);
     this.currentProvider = provider;
@@ -64,33 +63,27 @@ export class ProviderManager {
   private async autoDetectProvider(): Promise<ProviderType> {
     console.log('[DETECT] Finding best provider...');
 
-    // 1. Check for API key (fastest, most reliable)
-    if (process.env.KIMI_API_KEY) {
-      const api = this.providers.get('api')!;
+    // 1. OpenRouter/custom/generic API keys are fastest and most reliable.
+    const apiPreference: ProviderType[] = ['openrouter', 'custom', 'api', 'kimi'];
+    for (const type of apiPreference) {
+      const api = this.providers.get(type)!;
       try {
-        await api.initialize({ type: 'api', apiKey: process.env.KIMI_API_KEY });
+        await api.initialize(resolveProviderConfig({ type }));
         const available = await api.isAvailable();
         if (available) {
-          console.log('[OK] Using Kimi API');
-          return 'api';
+          console.log(`[OK] Using ${api.name}`);
+          return type;
         }
       } catch {
         // Continue to next option
       }
     }
 
-    // 2. Check for official CLI
-    const cli = this.providers.get('cli')!;
-    const cliAvailable = await cli.isAvailable();
-    if (cliAvailable) {
-      console.log('[OK] Using Kimi CLI');
-      return 'cli';
-    }
-
-    // 3. Fall back to browser (subscription mode)
-    console.log('[FALLBACK] Using Browser mode');
-    console.log('           Requires login at kimi.moonshot.cn');
-    return 'browser';
+    throw new Error(
+      'No API provider is configured.\n' +
+      'Run: omk config init openrouter --global --model <provider/model>\n' +
+      'Then set OPENROUTER_API_KEY, or choose an explicit fallback with --cli or --browser.'
+    );
   }
 
   /**
@@ -110,10 +103,31 @@ export class ProviderManager {
     return [
       {
         type: 'api',
+        name: 'Generic OpenAI-compatible API',
+        description: 'Direct API connection using OMK_API_* or KIMI_* compatibility variables.',
+        requirements: ['OMK_API_KEY or KIMI_API_KEY'],
+        isAvailable: Boolean(process.env.OMK_API_KEY || process.env.KIMI_API_KEY),
+      },
+      {
+        type: 'kimi',
         name: 'Kimi API',
-        description: 'Direct API connection. Requires KIMI_API_KEY.',
+        description: 'Moonshot/Kimi API preset.',
         requirements: ['KIMI_API_KEY environment variable'],
-        isAvailable: !!process.env.KIMI_API_KEY,
+        isAvailable: Boolean(process.env.KIMI_API_KEY),
+      },
+      {
+        type: 'openrouter',
+        name: 'OpenRouter API',
+        description: 'OpenRouter OpenAI-compatible gateway.',
+        requirements: ['OPENROUTER_API_KEY environment variable'],
+        isAvailable: Boolean(process.env.OPENROUTER_API_KEY),
+      },
+      {
+        type: 'custom',
+        name: 'Custom API',
+        description: 'Custom OpenAI-compatible gateway.',
+        requirements: ['CUSTOM_API_BASE_URL', 'CUSTOM_API_KEY', 'CUSTOM_API_MODEL'],
+        isAvailable: Boolean(process.env.CUSTOM_API_BASE_URL && process.env.CUSTOM_API_KEY),
       },
       {
         type: 'cli',

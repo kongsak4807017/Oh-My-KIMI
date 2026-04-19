@@ -1,336 +1,114 @@
 # Installation Guide
 
-Complete installation guide for Oh-my-KIMI (OMK).
+## Requirements
 
-## Table of Contents
+- Node.js 20+
+- npm 10+
+- Git for development installs
+- Optional: tmux for native pane-based team mode on macOS/Linux
+- Optional: Playwright for browser provider mode
 
-- [Prerequisites](#prerequisites)
-- [Global Installation](#global-installation)
-- [Local Development](#local-development)
-- [Windows Installation](#windows-installation)
-- [macOS Installation](#macos-installation)
-- [Linux Installation](#linux-installation)
-- [Verification](#verification)
-- [Troubleshooting](#troubleshooting)
-
-## Prerequisites
-
-- **Node.js 20+** - [Download here](https://nodejs.org/)
-- **Kimi API Key** - [Get from Moonshot](https://platform.moonshot.cn/)
-- **Git** - For cloning (development only)
-- **tmux** - Optional, for team mode
-
-### Check Prerequisites
+## Install From GitHub
 
 ```bash
-node --version    # Should be v20+
-npm --version     # Should be 10+
-git --version     # Any recent version
-tmux -V           # Optional, for team mode
+npm install -g github:kongsak4807017/oh-my-kimi
+omk --version
+omk setup
+omk doctor
 ```
 
-## Global Installation
-
-### From npm (When Published)
+## Local Development Install
 
 ```bash
-npm install -g oh-my-kimi
-```
-
-### From GitHub (Latest)
-
-```bash
-npm install -g github:yourusername/oh-my-kimi
-```
-
-### From Local Clone
-
-```bash
-git clone https://github.com/yourusername/oh-my-kimi.git
+git clone https://github.com/kongsak4807017/oh-my-kimi.git
 cd oh-my-kimi
 npm install
 npm run build
-npm link
-```
-
-## Local Development
-
-### Setup
-
-```bash
-# Clone repository
-git clone https://github.com/yourusername/oh-my-kimi.git
-cd oh-my-kimi
-
-# Install dependencies
-npm install
-
-# Build TypeScript
-npm run build
-
-# Link for global access
-npm link
-
-# Or use directly
-node dist/cli/omk.js --version
-```
-
-### Development Workflow
-
-```bash
-# Watch mode (auto-rebuild on changes)
-npm run dev
-
-# Build once
-npm run build
-
-# Run tests
 npm test
-
-# Check health
-npm run doctor
+npm link
 ```
 
-## Windows Installation
+## Configure A Provider
 
-### Option 1: Command Prompt / PowerShell
+OpenRouter:
+
+```bash
+export OPENROUTER_API_KEY="your_key"
+export OPENROUTER_MODEL="openai/gpt-4o-mini"
+omk --openrouter
+```
+
+PowerShell:
 
 ```powershell
-# Install globally
-npm install -g oh-my-kimi
-
-# Set API key (PowerShell)
-$env:KIMI_API_KEY="your_key_here"
-
-# Or permanently (PowerShell)
-[Environment]::SetEnvironmentVariable("KIMI_API_KEY", "your_key_here", "User")
+$env:OPENROUTER_API_KEY="your_key"
+$env:OPENROUTER_MODEL="openai/gpt-4o-mini"
+omk --openrouter
 ```
 
-### Option 2: Git Bash / WSL
+Custom OpenAI-compatible API:
 
 ```bash
-# Same as Linux/Mac
-npm install -g oh-my-kimi
-export KIMI_API_KEY=your_key_here
+export CUSTOM_API_KEY="your_key"
+export CUSTOM_API_BASE_URL="https://llm.example.com/v1"
+export CUSTOM_API_MODEL="my-model"
+omk --custom
 ```
 
-### Windows-Specific Notes
-
-1. **Execution Policy**: If you get execution policy errors:
-   ```powershell
-   Set-ExecutionPolicy -ExecutionPolicy RemoteSigned -Scope CurrentUser
-   ```
-   Or use `cmd` instead of PowerShell.
-
-2. **tmux on Windows**: Install via:
-   ```powershell
-   winget install psmux
-   # Or use WSL: wsl sudo apt install tmux
-   ```
-
-## macOS Installation
-
-### Using Homebrew (Recommended)
+Kimi/Moonshot preset:
 
 ```bash
-# Install Node.js if not present
-brew install node
-
-# Install tmux (optional, for team mode)
-brew install tmux
-
-# Install OMK
-npm install -g oh-my-kimi
+export KIMI_API_KEY="your_key"
+omk --kimi
 ```
 
-### Set API Key
+Project config:
 
-```bash
-# Add to ~/.zshrc or ~/.bash_profile
-echo 'export KIMI_API_KEY=your_key_here' >> ~/.zshrc
-source ~/.zshrc
+```toml
+# .omk/config.toml
+provider = "openrouter"
+model = "openai/gpt-4o-mini"
+
+[providers.openrouter]
+baseUrl = "https://openrouter.ai/api/v1"
+apiKeyEnv = "OPENROUTER_API_KEY"
 ```
 
-## Linux Installation
-
-### Ubuntu/Debian
+## Verify
 
 ```bash
-# Install Node.js
-curl -fsSL https://deb.nodesource.com/setup_20.x | sudo -E bash -
-sudo apt-get install -y nodejs
-
-# Install tmux (optional)
-sudo apt install tmux
-
-# Install OMK
-npm install -g oh-my-kimi
-```
-
-### Fedora/RHEL
-
-```bash
-# Install Node.js
-sudo dnf install nodejs20
-
-# Install tmux
-sudo dnf install tmux
-
-# Install OMK
-npm install -g oh-my-kimi
-```
-
-### Arch Linux
-
-```bash
-# Install Node.js
-sudo pacman -S nodejs npm
-
-# Install tmux
-sudo pacman -S tmux
-
-# Install OMK
-npm install -g oh-my-kimi
-```
-
-### Set API Key
-
-```bash
-# Add to ~/.bashrc or ~/.zshrc
-echo 'export KIMI_API_KEY=your_key_here' >> ~/.bashrc
-source ~/.bashrc
-```
-
-## Verification
-
-After installation, verify everything works:
-
-```bash
-# Check version
-omk --version
-# Output: oh-my-kimi v0.1.0
-
-# Check health
 omk doctor
-
-# Initialize a project
-mkdir my-project
-cd my-project
-omk setup
-
-# Start REPL
-omk
-```
-
-## Upgrading
-
-```bash
-# Global installation
-npm update -g oh-my-kimi
-
-# Or reinstall
-npm uninstall -g oh-my-kimi
-npm install -g oh-my-kimi
-```
-
-## Uninstalling
-
-```bash
-# Global uninstall
-npm uninstall -g oh-my-kimi
-
-# Remove local data
-rm -rf ~/.omk
+omk config init openrouter --global --model openai/gpt-4o-mini
+omk plan "summarize this repository"
+npm run build
+npm test
 ```
 
 ## Troubleshooting
 
-### "omk: command not found"
+`omk: command not found`
 
-1. Check npm global bin is in PATH:
-   ```bash
-   npm bin -g
-   # Add to PATH if needed
-   ```
+Check that the npm global bin directory is on `PATH`, then reinstall or run `npm link` from a local clone.
 
-2. Reinstall:
-   ```bash
-   npm uninstall -g oh-my-kimi
-   npm install -g oh-my-kimi
-   ```
+`API key not set`
 
-### "Cannot find module"
+Set the provider-specific key or pass `--api-key-env <ENV_NAME>`.
 
-Build the project:
+`Custom API mode fails`
+
+Confirm the endpoint is OpenAI-compatible and that the base URL includes the API version prefix, for example `https://host.example.com/v1`.
+
+`Team mode says tmux is missing`
+
+OMK now falls back to in-process lanes. Install tmux only if you want native split-pane workers:
+
 ```bash
-cd oh-my-kimi
-npm run build
-```
-
-### "KIMI_API_KEY not set"
-
-Set the environment variable:
-```bash
-export KIMI_API_KEY=your_key_here
-```
-
-### "tmux not found" (Team mode)
-
-Install tmux:
-```bash
-# macOS
 brew install tmux
-
-# Ubuntu/Debian
 sudo apt install tmux
-
-# Fedora
-sudo dnf install tmux
-
-# Windows (WSL)
-wsl sudo apt install tmux
 ```
 
-### PowerShell Execution Policy
-
-If you see execution policy errors in PowerShell:
+`PowerShell execution policy`
 
 ```powershell
-# Check current policy
-Get-ExecutionPolicy
-
-# Set policy (requires admin for AllUsers scope)
-Set-ExecutionPolicy RemoteSigned -Scope CurrentUser
-
-# Or use cmd instead
-cmd /c "omk --version"
+Set-ExecutionPolicy -ExecutionPolicy RemoteSigned -Scope CurrentUser
 ```
-
-### npm Permission Errors
-
-If you get EACCES errors:
-
-```bash
-# Change npm directory
-mkdir ~/.npm-global
-npm config set prefix '~/.npm-global'
-echo 'export PATH=~/.npm-global/bin:$PATH' >> ~/.bashrc
-source ~/.bashrc
-
-# Reinstall
-npm install -g oh-my-kimi
-```
-
-## Next Steps
-
-After installation:
-
-1. **Set API Key**: `export KIMI_API_KEY=your_key`
-2. **Initialize Project**: `omk setup`
-3. **Try REPL**: `omk`
-4. **Read Docs**: See [README.md](README.md)
-
-## Support
-
-- GitHub Issues: [Report bugs](https://github.com/yourusername/oh-my-kimi/issues)
-- Documentation: [Full docs](https://github.com/yourusername/oh-my-kimi#readme)

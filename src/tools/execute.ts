@@ -46,15 +46,16 @@ export class ExecuteTool {
     exitCode: number;
     duration: number;
   }> {
+    const parsed = this.normalizeCommand(input.command, input.args);
     // Security check
-    const cmdBase = input.command.split(' ')[0];
+    const cmdBase = parsed.command;
     
     if (!this.allowedCommands.has(cmdBase)) {
       throw new Error(`Command not allowed: ${cmdBase}. Allowed: ${Array.from(this.allowedCommands).slice(0, 10).join(', ')}...`);
     }
 
     // Check blocked patterns
-    const fullCmd = `${input.command} ${input.args?.join(' ') || ''}`;
+    const fullCmd = `${parsed.command} ${parsed.args.join(' ')}`;
     for (const pattern of this.blockedPatterns) {
       if (pattern.test(fullCmd)) {
         throw new Error(`Dangerous command pattern detected: ${pattern}`);
@@ -65,10 +66,10 @@ export class ExecuteTool {
     const timeout = input.timeout || 60000;
 
     return new Promise((resolve, reject) => {
-      const child = spawn(input.command, input.args || [], {
+      const child = spawn(parsed.command, parsed.args, {
         cwd: input.cwd || process.cwd(),
         env: { ...process.env, ...input.env },
-        shell: true,
+        shell: false,
       });
 
       let stdout = '';
@@ -110,6 +111,27 @@ export class ExecuteTool {
         reject(new Error(`Command timed out after ${timeout}ms`));
       }, timeout);
     });
+  }
+
+  private normalizeCommand(command: string, args?: string[]): { command: string; args: string[] } {
+    if (args?.length) {
+      return { command, args };
+    }
+
+    const tokens = command.match(/"[^"]*"|'[^']*'|\S+/g) ?? [];
+    if (tokens.length === 0) {
+      throw new Error('Command is required');
+    }
+
+    const parsedCommand = tokens[0];
+    if (!parsedCommand) {
+      throw new Error('Command is required');
+    }
+
+    return {
+      command: parsedCommand,
+      args: tokens.slice(1).map((token) => token.replace(/^['"]|['"]$/g, '')),
+    };
   }
 
   /**

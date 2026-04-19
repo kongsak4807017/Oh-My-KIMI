@@ -104,6 +104,188 @@ export const toolDefinitions = [
   },
 ];
 
+export const openAIToolDefinitions = [
+  {
+    type: 'function' as const,
+    function: {
+      name: 'read_file',
+      description: 'Read file contents. Supports offset and limit for large files.',
+      parameters: {
+        type: 'object',
+        properties: {
+          path: { type: 'string' },
+          offset: { type: 'number' },
+          limit: { type: 'number' },
+        },
+        required: ['path'],
+        additionalProperties: false,
+      },
+    },
+  },
+  {
+    type: 'function' as const,
+    function: {
+      name: 'write_file',
+      description: 'Write or append content to a file inside the workspace.',
+      parameters: {
+        type: 'object',
+        properties: {
+          path: { type: 'string' },
+          content: { type: 'string' },
+          append: { type: 'boolean' },
+        },
+        required: ['path', 'content'],
+        additionalProperties: false,
+      },
+    },
+  },
+  {
+    type: 'function' as const,
+    function: {
+      name: 'list_directory',
+      description: 'List directory contents. Supports recursive listing.',
+      parameters: {
+        type: 'object',
+        properties: {
+          path: { type: 'string' },
+          recursive: { type: 'boolean' },
+        },
+        required: ['path'],
+        additionalProperties: false,
+      },
+    },
+  },
+  {
+    type: 'function' as const,
+    function: {
+      name: 'search_files',
+      description: 'Search for a literal pattern in files.',
+      parameters: {
+        type: 'object',
+        properties: {
+          path: { type: 'string' },
+          pattern: { type: 'string' },
+          filePattern: { type: 'string' },
+        },
+        required: ['path', 'pattern'],
+        additionalProperties: false,
+      },
+    },
+  },
+  {
+    type: 'function' as const,
+    function: {
+      name: 'web_fetch',
+      description: 'Fetch content from a URL.',
+      parameters: {
+        type: 'object',
+        properties: {
+          url: { type: 'string' },
+          maxLength: { type: 'number' },
+          format: { type: 'string', enum: ['text', 'html', 'json'] },
+        },
+        required: ['url'],
+        additionalProperties: false,
+      },
+    },
+  },
+  {
+    type: 'function' as const,
+    function: {
+      name: 'diagnostics',
+      description: 'Run TypeScript diagnostics.',
+      parameters: {
+        type: 'object',
+        properties: {
+          file: { type: 'string' },
+          severity: { type: 'string', enum: ['error', 'warning', 'all'] },
+        },
+        required: ['file'],
+        additionalProperties: false,
+      },
+    },
+  },
+  {
+    type: 'function' as const,
+    function: {
+      name: 'document_symbols',
+      description: 'Extract symbols from a file.',
+      parameters: {
+        type: 'object',
+        properties: { file: { type: 'string' } },
+        required: ['file'],
+        additionalProperties: false,
+      },
+    },
+  },
+  {
+    type: 'function' as const,
+    function: {
+      name: 'find_references',
+      description: 'Find all references to a symbol across the codebase.',
+      parameters: {
+        type: 'object',
+        properties: {
+          file: { type: 'string' },
+          symbol: { type: 'string' },
+        },
+        required: ['file', 'symbol'],
+        additionalProperties: false,
+      },
+    },
+  },
+  {
+    type: 'function' as const,
+    function: {
+      name: 'execute_command',
+      description: 'Execute an allowlisted shell command.',
+      parameters: {
+        type: 'object',
+        properties: {
+          command: { type: 'string' },
+          args: { type: 'array', items: { type: 'string' } },
+          timeout: { type: 'number' },
+        },
+        required: ['command'],
+        additionalProperties: false,
+      },
+    },
+  },
+  {
+    type: 'function' as const,
+    function: {
+      name: 'memory_read',
+      description: 'Read project memory and notepad.',
+      parameters: {
+        type: 'object',
+        properties: {
+          section: { type: 'string' },
+        },
+        additionalProperties: false,
+      },
+    },
+  },
+  {
+    type: 'function' as const,
+    function: {
+      name: 'memory_write',
+      description: 'Write to project memory.',
+      parameters: {
+        type: 'object',
+        properties: {
+          type: { type: 'string' },
+          content: { type: 'string' },
+          priority: { type: 'string' },
+          category: { type: 'string' },
+          context: { type: 'string' },
+        },
+        required: ['type', 'content'],
+        additionalProperties: false,
+      },
+    },
+  },
+];
+
 // Tool dispatcher
 export class ToolDispatcher {
   private cwd: string;
@@ -119,7 +301,9 @@ export class ToolDispatcher {
     const { getExecuteTool } = await import('./execute.js');
     const { getMemoryTools } = await import('./memory.js');
 
-    switch (toolName) {
+    const normalizedToolName = toolName.startsWith('$') ? toolName : `$${toolName}`;
+
+    switch (normalizedToolName) {
       case '$read_file':
         return getFileSystemTools(this.cwd).readFile(args as any);
       

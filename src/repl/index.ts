@@ -1,6 +1,6 @@
 /**
  * Interactive REPL for OMK
- * Real-time chat session with Kimi AI
+ * Real-time chat session with the configured provider
  */
 
 import { createInterface, Interface as ReadlineInterface } from 'readline';
@@ -38,6 +38,7 @@ import { getGSDExecutor } from '../skills/gsd-executor.js';
 import { getFileSystemTools } from '../tools/file-system.js';
 import { getMemoryTools } from '../tools/memory.js';
 import { resolveExecutionProfile } from '../orchestration/phase-map.js';
+import { runEngine } from '../orchestration/index.js';
 import {
   buildSkillSystemPrompt,
   detectSkillInvocations,
@@ -233,7 +234,15 @@ export class OMKREPL {
     return [hits.length ? hits : completions, line];
   }
 
-  async start(options?: { provider?: string; reasoning?: string; yolo?: boolean }): Promise<void> {
+  async start(options?: {
+    provider?: string;
+    reasoning?: string;
+    yolo?: boolean;
+    model?: string;
+    baseUrl?: string;
+    apiKeyEnv?: string;
+    headers?: Record<string, string>;
+  }): Promise<void> {
     // Set terminal title to project name
     const projectName = basename(this.cwd);
     process.stdout.write(`\x1b]0;OMK: ${projectName}\x07`);
@@ -241,14 +250,18 @@ export class OMKREPL {
     if (options?.yolo) {
       console.log('\n[WARNING] YOLO mode enabled - bypassing confirmations');
     }
-    console.log('\nWelcome to Oh-my-KIMI (OMK)');
+    console.log('\nWelcome to OMK');
     
     // Initialize provider
     try {
-      const providerType = (options?.provider as 'api' | 'browser' | 'cli' | 'auto') || 'auto';
+      const providerType = (options?.provider as any) || 'auto';
       await this.providerManager.initialize({
         type: providerType,
         reasoning: (options?.reasoning as 'low' | 'medium' | 'high') || 'medium',
+        model: options?.model,
+        baseUrl: options?.baseUrl,
+        apiKeyEnv: options?.apiKeyEnv,
+        headers: options?.headers,
       });
       
       const currentType = this.providerManager.getCurrentType();
@@ -256,7 +269,7 @@ export class OMKREPL {
     } catch (err) {
       console.error('\n❌ Failed to initialize provider:');
       console.error(`   ${err instanceof Error ? err.message : err}`);
-      console.error('\n[HINT] Try: omk --provider=browser (for subscription mode)');
+      console.error('\n[HINT] Try: omk --openrouter --model <provider/model>, or omk --browser');
       process.exit(1);
     }
     
@@ -510,6 +523,26 @@ export class OMKREPL {
       return;
     }
 
+    // Route to orchestration engine for supported skills
+    const engineSkills = new Set([
+      'ralph', 'team', 'ultrawork', 'swarm', 'ultraqa',
+      'pipeline', 'autopilot', 'plan', 'ralplan', 'deep-interview',
+    ]);
+
+    if (engineSkills.has(primarySkill)) {
+      const argsArray = skillArgs ? [skillArgs] : [];
+      try {
+        console.log(`\x1b[36m[Activating engine: $${primarySkill}]\x1b[0m\n`);
+        await runEngine(primarySkill, argsArray, this.cwd, {
+          yolo: false, // REPL mode does not auto-yolo
+          reasoning: (this.providerManager as any).config?.reasoning || 'medium',
+        });
+      } catch (err) {
+        console.error('\x1b[31mEngine execution failed:', err instanceof Error ? err.message : err, '\x1b[0m');
+      }
+      return;
+    }
+
     const resolvedSkills = skillNames
       .map(skillName => loadSkillContent(this.cwd, skillName))
       .filter((skill): skill is NonNullable<typeof skill> => Boolean(skill));
@@ -595,7 +628,7 @@ export class OMKREPL {
       logger.updateActivity(runningActivity.id, {
         status: 'completed',
         message: `${profile.agent} received optimized context`,
-        details: `${optimizedMessages.length} message(s) ready for Kimi`,
+        details: `${optimizedMessages.length} message(s) ready for provider`,
         skillName: primarySkill,
       });
       logger.stop();
@@ -797,9 +830,9 @@ export class OMKREPL {
       
       logger.addActivity({
         type: 'thinking',
-        agent: 'kimi',
+        agent: 'provider',
         role: 'explorer',
-        message: 'Handing repository snapshot to Kimi',
+        message: 'Handing repository snapshot to provider',
         details: 'Preparing analysis response',
         status: 'running',
         taskType: 'repository-analysis',
@@ -835,7 +868,7 @@ export class OMKREPL {
 
       logger.addActivity({
         type: 'complete',
-        agent: 'kimi',
+        agent: 'provider',
         role: 'explorer',
         message: 'Repository analysis complete',
         status: 'completed',
@@ -986,7 +1019,7 @@ export class OMKREPL {
         type: 'thinking',
         agent: profile.agent,
         role: profile.role,
-        message: `Kimi ${profile.role} is ${profile.task}`,
+        message: `${profile.agent} is ${profile.task}`,
         details: input.slice(0, 120),
         status: 'running',
         taskType,
@@ -1000,11 +1033,13 @@ export class OMKREPL {
       logger.stop();
       console.log('');
       
+      let streamFinished = false;
       for await (const chunk of provider.stream({
         messages: [
           { role: 'system', content: systemPrompt },
           ...optimizedMessages,
         ],
+        reasoning: (this.providerManager as any).config?.reasoning || 'medium',
       })) {
         // Check timeout
         if (Date.now() - startTime > streamTimeout) {
@@ -1016,28 +1051,51 @@ export class OMKREPL {
             status: 'failed',
             taskType,
           });
-          break;
+          streamFinished = true;
         }
         
-        // Write chunk immediately
-        process.stdout.write(chunk.content);
-        fullResponse += chunk.content;
-        chunkCount++;
-        
-        // Log progress every 50 chunks
-        if (chunkCount % 50 === 0) {
-          logger.addActivity({
-            type: 'action',
-            agent: profile.agent,
-            role: profile.role,
-            message: `Streaming progress: ${chunkCount} chunks`,
-            details: `${fullResponse.length} chars received`,
-            status: 'completed',
-            taskType,
-          });
+        if (!streamFinished) {
+          // Write chunk immediately
+          process.stdout.write(chunk.content);
+          fullResponse += chunk.content;
+          chunkCount++;
+          
+          // Log progress every 50 chunks
+          if (chunkCount % 50 === 0) {
+            logger.addActivity({
+              type: 'action',
+              agent: profile.agent,
+              role: profile.role,
+              message: `Streaming progress: ${chunkCount} chunks`,
+              details: `${fullResponse.length} chars received`,
+              status: 'completed',
+              taskType,
+            });
+          }
+          
+          if (chunk.done) {
+            streamFinished = true;
+          }
         }
-        
-        if (chunk.done) break;
+      }
+
+      if (!fullResponse.trim()) {
+        const fallback = await provider.chat({
+          messages: [
+            { role: 'system', content: systemPrompt },
+            ...optimizedMessages,
+          ],
+          reasoning: (this.providerManager as any).config?.reasoning || 'medium',
+        });
+        fullResponse = fallback.content || '';
+        if (fullResponse) {
+          process.stdout.write(fullResponse);
+        }
+      }
+
+      if (!fullResponse.trim()) {
+        fullResponse = '[No response content returned by provider. Run /settings and `omk config show` to verify provider, model, and API key.]';
+        console.log(fullResponse);
       }
 
       // Log completion
@@ -1146,7 +1204,7 @@ export class OMKREPL {
 
   private showHelp(): void {
     console.log(`
-\x1b[1mOh-my-KIMI Commands:\x1b[0m
+\x1b[1mOMK Commands:\x1b[0m
 
 \x1b[1mBuiltin Commands:\x1b[0m
   /help              Show this help
@@ -1490,7 +1548,7 @@ export class OMKREPL {
       const current = this.providerManager.getCurrentType();
       console.log(`Current provider: ${current || 'not initialized'}`);
       console.log('Usage: /model <provider> [options]');
-      console.log('Providers: api, browser, cli');
+      console.log('Providers: api, kimi, openrouter, custom, browser, cli');
       return;
     }
 
@@ -1649,7 +1707,15 @@ export class OMKREPL {
 // Factory function
 export async function startREPL(
   cwd?: string, 
-  options?: { provider?: string; reasoning?: string; yolo?: boolean }
+  options?: {
+    provider?: string;
+    reasoning?: string;
+    yolo?: boolean;
+    model?: string;
+    baseUrl?: string;
+    apiKeyEnv?: string;
+    headers?: Record<string, string>;
+  }
 ): Promise<void> {
   const repl = new OMKREPL(cwd);
   await repl.start(options);

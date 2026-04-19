@@ -62,7 +62,26 @@ const KEYWORD_RULES: KeywordRule[] = [
   { skillName: 'ai-slop-cleaner', triggers: ['cleanup', 'refactor', 'deslop'] },
 ];
 
-const FLAGS_WITH_VALUES = new Set(['--provider', '--model', '--reasoning']);
+const FLAGS_WITH_VALUES = new Set(['--provider', '--model', '--reasoning', '--base-url', '--api-key-env', '--header']);
+const FLAGS_WITHOUT_VALUES = new Set([
+  '--api',
+  '--kimi',
+  '--openrouter',
+  '--custom',
+  '--browser',
+  '--cli',
+  '--high',
+  '--thinking',
+  '--yolo',
+  '--passthrough',
+  '--raw',
+  '--shell',
+  '--tui',
+  '--force',
+  '--dry-run',
+  '--verbose',
+  '--global',
+]);
 
 function getSkillRoots(cwd: string): Array<{ root: string; source: ResolvedSkill['source'] }> {
   return [
@@ -89,6 +108,8 @@ export function stripCliFlags(args: string[]): string[] {
 
     if (FLAGS_WITH_VALUES.has(arg)) {
       i++;
+    } else if (FLAGS_WITHOUT_VALUES.has(arg)) {
+      continue;
     }
   }
 
@@ -189,10 +210,10 @@ export function buildSkillSystemPrompt(args: {
     : '';
 
   return [
-    `You are executing the ${args.skillName} skill inside Oh-my-KIMI (OMK).`,
+    `You are executing the ${args.skillName} skill inside OMK.`,
     sourceLabel,
     'Treat the skill instructions as mandatory workflow guidance.',
-    'Use Kimi as the reasoning engine, but preserve OMX-style orchestration behavior.',
+    'Use the configured provider as the reasoning engine, while preserving OMX-style orchestration behavior.',
     '',
     'Skill instructions:',
     args.skillContent.trim(),

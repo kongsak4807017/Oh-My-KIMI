@@ -1,7 +1,7 @@
 {
   "name": "omk-cli",
   "version": "0.2.0",
-  "description": "Multi-agent orchestration CLI for Kimi AI - 36+ skills for autonomous development",
+  "description": "Provider-backed OMX-style orchestration CLI for autonomous development",
   "type": "module",
   "main": "dist/index.js",
   "bin": {
@@ -22,15 +22,17 @@
     "setup": "node dist/cli/omk.js setup",
     "doctor": "node dist/cli/omk.js doctor",
     "prepublishOnly": "npm run build:clean",
-    "postinstall": "node -e \"console.log('\\n🎉 Oh-my-KIMI installed! Run: omk setup\\n')\"",
+    "postinstall": "node -e \"console.log('\\nOMK installed. Run: omk setup\\n')\"",
     "test": "node --test dist/**/*.test.js"
   },
   "engines": {
     "node": ">=20"
   },
   "keywords": [
+    "openrouter",
+    "openai-compatible",
+    "custom-api",
     "kimi",
-    "moonshot",
     "cli",
     "agents",
     "orchestration",
@@ -44,7 +46,7 @@
     "mcp",
     "model-context-protocol"
   ],
-  "author": "Oh-my-KIMI Team <omk@example.com>",
+  "author": "OMK Team <omk@example.com>",
   "repository": {
     "type": "git",
     "url": "git+https://github.com/kongsak4807017/oh-my-kimi.git"
