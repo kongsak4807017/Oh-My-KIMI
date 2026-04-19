@@ -38,6 +38,7 @@ import { getFileSystemTools } from '../tools/file-system.js';
 import { getMemoryTools } from '../tools/memory.js';
 import { resolveExecutionProfile } from '../orchestration/phase-map.js';
 import { runEngine } from '../orchestration/index.js';
+import { runModelToolLoop } from '../orchestration/model-runner.js';
 import {
   buildSkillSystemPrompt,
   detectSkillInvocations,
@@ -1022,7 +1023,49 @@ export class OMKREPL {
       });
       logger.stop();
       console.log('');
-      
+
+      if (this.shouldUseAgentLoop(input)) {
+        const agentPrompt = [
+          'Conversation context:',
+          ...this.state.history.slice(-6).map(msg => `${msg.role}: ${msg.content}`),
+          '',
+          'Current user request:',
+          input,
+          '',
+          'Execute the request if it is actionable. Use tools for real work. If the request asks about capability, answer truthfully and, if asked to do it, run at least one relevant tool or sub-agent. End with a short evidence summary.',
+        ].join('\n');
+
+        const result = await runModelToolLoop(agentPrompt, this.cwd, {
+          reasoning: (this.providerManager as any).config?.reasoning || 'medium',
+        }, {
+          maxIterations: 6,
+          showEvidence: true,
+          systemPrompt,
+        });
+
+        fullResponse = result.stdout || '';
+        if (!fullResponse.trim()) {
+          fullResponse = '[No response content returned by provider. Run /settings and `omk config show` to verify provider, model, and API key.]';
+          console.log(fullResponse);
+        }
+
+        logger.addActivity({
+          type: 'complete',
+          agent: profile.agent,
+          role: profile.role,
+          message: 'Agent loop complete',
+          details: `${fullResponse.length} chars, ${result.toolCalls ?? 0} tool calls`,
+          status: 'completed',
+          taskType,
+        });
+
+        console.log('');
+        this.state.history.push({ role: 'assistant', content: fullResponse });
+        const responseTokens = this.contextManager.estimateTokens(fullResponse);
+        this.contextManager.storeCache(input, fullResponse, responseTokens);
+        return;
+      }
+
       let streamFinished = false;
       for await (const chunk of provider.stream({
         messages: [
@@ -1190,6 +1233,11 @@ export class OMKREPL {
       return 'refactoring';
     }
     return 'general-chat';
+  }
+
+  private shouldUseAgentLoop(input: string): boolean {
+    const lower = input.toLowerCase();
+    return /(?:ทำเลย|จัดการ|แก้|สร้าง|เขียน|อ่าน|ตรวจ|ค้นหา|รัน|ทดสอบ|อัปโหลด|อัพโหลด|ทำงานจริง|หลักฐาน|spawn|sub[-_ ]?agent|web[_ ]?search|web[_ ]?fetch|execute|run|fix|create|write|read|search|test|commit|push|implement)/i.test(lower);
   }
 
   private showHelp(): void {

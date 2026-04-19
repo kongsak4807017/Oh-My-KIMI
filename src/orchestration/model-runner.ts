@@ -25,6 +25,7 @@ export interface RunResult {
   stdout: string;
   stderr: string;
   exitCode: number | null;
+  toolCalls?: number;
 }
 
 function providerConfigFromOptions(options: ModelRunOptions): ProviderConfig {
@@ -92,7 +93,7 @@ export async function runModelToolLoop(
   prompt: string,
   cwd: string,
   options: ModelRunOptions = {},
-  loopOptions: { maxIterations?: number; executeTextActions?: boolean } = {}
+  loopOptions: { maxIterations?: number; executeTextActions?: boolean; showEvidence?: boolean; systemPrompt?: string } = {}
 ): Promise<RunResult> {
   const provider = await getInitializedProvider(options);
   const maxIterations = loopOptions.maxIterations ?? 5;
@@ -101,13 +102,21 @@ export async function runModelToolLoop(
     {
       role: 'system',
       content:
-        'You are an autonomous coding agent. Use the provided tools when reading files, writing files, searching, or running verification commands. Keep responses concise and continue until the requested step is complete.',
+        [
+          'You are an autonomous coding agent.',
+          'Use the provided tools when reading files, writing files, searching, spawning subagents, or running verification commands.',
+          'For implementation or investigation requests, do not merely describe capabilities. Call tools and then summarize what actually happened.',
+          'If the user says "do it" or "ทำเลย", infer the actionable task from recent context and execute it.',
+          loopOptions.systemPrompt,
+        ].filter(Boolean).join('\n'),
     },
     { role: 'user', content: prompt },
   ];
 
   let stdout = '';
   let stderr = '';
+  let toolCallCount = 0;
+  const showEvidence = loopOptions.showEvidence ?? true;
 
   for (let iteration = 0; iteration < maxIterations; iteration++) {
     let response;
@@ -132,6 +141,7 @@ export async function runModelToolLoop(
 
     const toolCalls = response.toolCalls ?? [];
     if (toolCalls.length > 0) {
+      toolCallCount += toolCalls.length;
       messages.push({
         role: 'assistant',
         content: response.content || '',
@@ -139,8 +149,19 @@ export async function runModelToolLoop(
       });
 
       for (const toolCall of toolCalls) {
-        const result = await executeToolCall(toolCall, cwd);
+        if (showEvidence) {
+          const evidence = formatToolStart(toolCall);
+          stdout += evidence;
+          process.stdout.write(evidence);
+        }
+
+        const result = await executeToolCall(toolCall, cwd, options);
         const content = typeof result === 'string' ? result : JSON.stringify(result, null, 2);
+        if (showEvidence) {
+          const evidence = formatToolEnd(toolCall, result);
+          stdout += evidence;
+          process.stdout.write(evidence);
+        }
         stdout += `\n[Tool ${toolCall.function.name}]\n${content}\n`;
         messages.push({
           role: 'tool',
@@ -153,6 +174,7 @@ export async function runModelToolLoop(
 
     const textActions = executeTextActions ? parseActions(response.content) : [];
     if (textActions.length > 0) {
+      toolCallCount += textActions.length;
       const execResults = await executeActions(textActions, cwd);
       const feedback = formatResultsForPrompt(execResults);
       stdout += feedback;
@@ -165,10 +187,16 @@ export async function runModelToolLoop(
     break;
   }
 
-  return { stdout, stderr, exitCode: 0 };
+  if (showEvidence && toolCallCount === 0) {
+    const evidence = '[agent] No tools were called; no external process, file read/write, web fetch, or sub-agent work was executed.\n';
+    stdout += evidence;
+    process.stdout.write(evidence);
+  }
+
+  return { stdout, stderr, exitCode: 0, toolCalls: toolCallCount };
 }
 
-async function executeToolCall(toolCall: ToolCall, cwd: string): Promise<unknown> {
+async function executeToolCall(toolCall: ToolCall, cwd: string, options: ModelRunOptions): Promise<unknown> {
   let args: Record<string, unknown> = {};
   if (toolCall.function.arguments?.trim()) {
     try {
@@ -178,6 +206,10 @@ async function executeToolCall(toolCall: ToolCall, cwd: string): Promise<unknown
     }
   }
 
+  if (toolCall.function.name === 'spawn_subagent') {
+    return runSubagent(args, options);
+  }
+
   const { executeAction } = await import('./action-executor.js');
   const result = await executeAction({
     tool: toolCall.function.name,
@@ -185,4 +217,59 @@ async function executeToolCall(toolCall: ToolCall, cwd: string): Promise<unknown
   }, cwd);
 
   return result.success ? result.result : { error: result.error ?? 'Tool failed' };
+}
+
+async function runSubagent(args: Record<string, unknown>, options: ModelRunOptions): Promise<unknown> {
+  const task = String(args.task ?? '').trim();
+  if (!task) {
+    return { error: 'spawn_subagent requires task' };
+  }
+
+  const model = typeof args.model === 'string' && args.model.trim()
+    ? args.model.trim()
+    : process.env.OMK_SUBAGENT_MODEL || process.env.OPENROUTER_FREE_MODEL || 'openrouter/free';
+  const role = typeof args.role === 'string' && args.role.trim() ? args.role.trim() : 'subagent';
+  const provider = await getInitializedProvider(options);
+
+  const response = await provider.chat({
+    model,
+    reasoning: 'low',
+    messages: [
+      {
+        role: 'system',
+        content: `You are ${role}, a bounded sub-agent. Complete only this assigned slice. Be concise and return evidence or findings.`,
+      },
+      { role: 'user', content: task },
+    ],
+  });
+
+  return {
+    role,
+    model,
+    task,
+    content: response.content || '',
+    finishReason: response.finishReason,
+  };
+}
+
+function formatToolStart(toolCall: ToolCall): string {
+  const args = compactArguments(toolCall.function.arguments);
+  return `[tool] ${toolCall.function.name} ${args}\n`;
+}
+
+function formatToolEnd(toolCall: ToolCall, result: unknown): string {
+  return `[tool] ${toolCall.function.name} ok - ${summarizeResult(result)}\n`;
+}
+
+function compactArguments(raw: string): string {
+  if (!raw) return '{}';
+  return raw.length > 220 ? `${raw.slice(0, 217)}...` : raw;
+}
+
+function summarizeResult(result: unknown): string {
+  if (typeof result === 'string') {
+    return `${result.length} chars`;
+  }
+  const json = JSON.stringify(result);
+  return json.length > 180 ? `${json.slice(0, 177)}...` : json;
 }

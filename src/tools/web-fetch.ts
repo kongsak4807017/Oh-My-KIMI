@@ -11,6 +11,11 @@ export interface WebFetchInput {
   format?: 'text' | 'html' | 'json';
 }
 
+export interface WebSearchInput {
+  query: string;
+  maxResults?: number;
+}
+
 export class WebFetchTool {
   async fetch(input: WebFetchInput): Promise<{ 
     content: string; 
@@ -136,6 +141,60 @@ export class WebFetchTool {
     } catch (err) {
       throw new Error(`Failed to fetch GitHub repo: ${err instanceof Error ? err.message : String(err)}`);
     }
+  }
+
+  async search(input: WebSearchInput): Promise<{
+    query: string;
+    results: Array<{ title: string; url: string; snippet: string }>;
+  }> {
+    const maxResults = Math.max(1, Math.min(input.maxResults ?? 5, 10));
+    const apiUrl = `https://api.duckduckgo.com/?q=${encodeURIComponent(input.query)}&format=json&no_html=1&skip_disambig=1`;
+
+    const response = await fetch(apiUrl, {
+      headers: {
+        'User-Agent': 'Mozilla/5.0 (compatible; OMK-Bot/1.0)',
+      },
+    });
+
+    if (!response.ok) {
+      throw new Error(`Search failed: HTTP ${response.status}`);
+    }
+
+    const data = await response.json() as {
+      AbstractText?: string;
+      AbstractURL?: string;
+      Heading?: string;
+      RelatedTopics?: Array<any>;
+    };
+
+    const results: Array<{ title: string; url: string; snippet: string }> = [];
+    if (data.AbstractText && data.AbstractURL) {
+      results.push({
+        title: data.Heading || input.query,
+        url: data.AbstractURL,
+        snippet: data.AbstractText,
+      });
+    }
+
+    const collect = (topics: Array<any>): void => {
+      for (const topic of topics) {
+        if (results.length >= maxResults) return;
+        if (Array.isArray(topic.Topics)) {
+          collect(topic.Topics);
+          continue;
+        }
+        if (topic.FirstURL && topic.Text) {
+          results.push({
+            title: topic.Text.split(' - ')[0] || topic.FirstURL,
+            url: topic.FirstURL,
+            snippet: topic.Text,
+          });
+        }
+      }
+    };
+
+    collect(data.RelatedTopics ?? []);
+    return { query: input.query, results: results.slice(0, maxResults) };
   }
 }
 

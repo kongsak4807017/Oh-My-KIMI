@@ -55,6 +55,14 @@ export const toolDefinitions = [
     },
   },
   {
+    name: '$web_search',
+    description: 'Search the web and return concise result links/snippets.',
+    parameters: {
+      query: 'Search query (required)',
+      maxResults: 'Maximum results, 1-10 (default: 5)',
+    },
+  },
+  {
     name: '$diagnostics',
     description: 'Run TypeScript diagnostics (tsc --noEmit).',
     parameters: {
@@ -192,6 +200,22 @@ export const openAIToolDefinitions = [
   {
     type: 'function' as const,
     function: {
+      name: 'web_search',
+      description: 'Search the web and return concise result links/snippets.',
+      parameters: {
+        type: 'object',
+        properties: {
+          query: { type: 'string' },
+          maxResults: { type: 'number' },
+        },
+        required: ['query'],
+        additionalProperties: false,
+      },
+    },
+  },
+  {
+    type: 'function' as const,
+    function: {
       name: 'diagnostics',
       description: 'Run TypeScript diagnostics.',
       parameters: {
@@ -201,6 +225,23 @@ export const openAIToolDefinitions = [
           severity: { type: 'string', enum: ['error', 'warning', 'all'] },
         },
         required: ['file'],
+        additionalProperties: false,
+      },
+    },
+  },
+  {
+    type: 'function' as const,
+    function: {
+      name: 'spawn_subagent',
+      description: 'Run a bounded sub-agent lane on a focused task. Use for simple independent subtasks. The sub-agent can use a different model, for example openrouter/free or another configured free OpenRouter model.',
+      parameters: {
+        type: 'object',
+        properties: {
+          task: { type: 'string' },
+          role: { type: 'string' },
+          model: { type: 'string' },
+        },
+        required: ['task'],
         additionalProperties: false,
       },
     },
@@ -318,6 +359,9 @@ export class ToolDispatcher {
       
       case '$web_fetch':
         return getWebFetchTool().fetch(args as any);
+
+      case '$web_search':
+        return getWebFetchTool().search(args as any);
       
       case '$diagnostics':
         return getCodeIntelTools(this.cwd).diagnostics(args as any);
