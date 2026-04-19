@@ -1,9 +1,9 @@
 /**
  * Activity Logger for the REPL.
  *
- * Default mode is intentionally non-intrusive: it never rewinds the cursor or
- * redraws a boxed HUD over the input area. Set OMK_HUD=full to restore the
- * old dashboard renderer for debugging.
+ * Default mode is silent: it records dashboard state but prints nothing into
+ * the REPL transcript. Set OMK_HUD=compact for append-only status lines, or
+ * OMK_HUD=full to restore the boxed dashboard renderer for debugging.
  */
 
 import { stdout } from 'process';
@@ -36,6 +36,7 @@ export class ActivityLogger {
   private renderedLines = 0;
   private dashboard = getDashboardState();
   private readonly fullHud = process.env.OMK_HUD === 'full';
+  private readonly compactHud = process.env.OMK_HUD === 'compact';
   private lastCompactLine = '';
 
   configure(cwd: string): void {
@@ -120,7 +121,9 @@ export class ActivityLogger {
       return;
     }
 
-    this.renderCompact(activity);
+    if (this.compactHud) {
+      this.renderCompact(activity);
+    }
   }
 
   private renderCompact(activity: Activity): void {

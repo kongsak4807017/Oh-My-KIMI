@@ -32,7 +32,6 @@ import { PluginManager } from '../plugins/index.js';
 import { startMCPServer, stopMCPServer } from '../mcp/server.js';
 import { getContextManager, ContextStats } from '../utils/context-manager.js';
 import { getCodebaseIndexer, getFileChunker, RepositoryMap } from '../indexer/index.js';
-import { InteractiveAutocomplete } from './autocomplete-prompt.js';
 import { getActivityLogger } from './activity-logger.js';
 import { getGSDExecutor } from '../skills/gsd-executor.js';
 import { getFileSystemTools } from '../tools/file-system.js';
@@ -95,7 +94,6 @@ export class OMKREPL {
   private codebaseIndexer: ReturnType<typeof getCodebaseIndexer>;
   private fileChunker = getFileChunker();
   private repoMap: RepositoryMap | null = null;
-  private autocomplete: InteractiveAutocomplete;
   private currentSessionId: string | null = null;
   private sessionTitle: string | null = null;
   private gsdExecutor: ReturnType<typeof getGSDExecutor>;
@@ -103,7 +101,6 @@ export class OMKREPL {
 
   constructor(private cwd: string = process.cwd()) {
     this.codebaseIndexer = getCodebaseIndexer(this.cwd);
-    this.autocomplete = new InteractiveAutocomplete(this.cwd);
     this.gsdExecutor = getGSDExecutor(this.cwd);
     this.availableSkills = listAvailableSkills(this.cwd);
     this.providerManager = getProviderManager();
@@ -134,20 +131,26 @@ export class OMKREPL {
   }
 
   private setupEventHandlers(): void {
-    this.rl.on('line', (input: string) => {
-      this.handleInput(input.trim());
+    this.rl.on('line', async (input: string) => {
+      this.rl.pause();
+      await this.handleInput(input.trim());
+      if (this.isRunning) {
+        this.rl.resume();
+        this.rl.setPrompt(this.getPrompt());
+        this.rl.prompt();
+      }
     });
 
     this.rl.on('close', () => {
       this.shutdown();
     });
 
-    // Note: Interactive autocomplete handles all input now
-
     // Handle Ctrl+C gracefully
     process.on('SIGINT', () => {
       console.log('\nUse /exit or /quit to exit properly.');
-      // Input loop will continue
+      if (this.isRunning) {
+        this.rl.prompt();
+      }
     });
   }
 
@@ -292,20 +295,7 @@ export class OMKREPL {
 
     this.isRunning = true;
     
-    // Start autocomplete input loop
-    this.runInputLoop();
-  }
-
-  private async runInputLoop(): Promise<void> {
-    while (this.isRunning) {
-      try {
-        const input = await this.autocomplete.prompt();
-        await this.handleInput(input.trim());
-      } catch (err) {
-        console.error('Input error:', err);
-        break;
-      }
-    }
+    this.rl.prompt();
   }
 
   private async handleInput(rawInput: string): Promise<void> {
