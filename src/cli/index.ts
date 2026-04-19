@@ -586,7 +586,15 @@ async function launch(args: string[]): Promise<void> {
   
   // Show provider hint
   if (!flags.provider || flags.provider === 'auto') {
-    if (!process.env.OPENROUTER_API_KEY && !process.env.OMK_API_KEY && !process.env.CUSTOM_API_KEY && !process.env.KIMI_API_KEY) {
+    const resolved = resolveProviderConfig({
+      type: (flags.provider as any) || undefined,
+      model: flags.model,
+      baseUrl: flags.baseUrl,
+      apiKeyEnv: flags.apiKeyEnv,
+      headers: flags.headers,
+    }, process.cwd());
+
+    if (!resolved.apiKey && !process.env.OPENROUTER_API_KEY && !process.env.OMK_API_KEY && !process.env.CUSTOM_API_KEY && !process.env.KIMI_API_KEY) {
       console.log('\n[INFO] No API key found. Configure an API provider first.');
       console.log('       Run: omk config init openrouter --global --model <provider/model>');
     }

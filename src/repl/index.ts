@@ -273,8 +273,11 @@ export class OMKREPL {
     } catch (err) {
       console.error('\n❌ Failed to initialize provider:');
       console.error(`   ${err instanceof Error ? err.message : err}`);
-      console.error('\n[HINT] Try: omk --openrouter --model <provider/model>, or omk --browser');
-      process.exit(1);
+      console.error('\n[HINT] Try: omk config show, omk --openrouter, or omk --browser');
+      this.isRunning = false;
+      this.rl.close();
+      process.exitCode = 1;
+      return;
     }
     
     console.log('Type /help for commands, /exit to quit\n');

@@ -40,6 +40,10 @@ export class ProviderManager {
     if (providerType === 'auto') {
       providerType = await this.autoDetectProvider();
       console.log(`[AUTO] Selected provider: ${providerType}`);
+      this.config = resolveProviderConfig({
+        ...config,
+        type: providerType,
+      });
     }
 
     const provider = this.providers.get(providerType);
