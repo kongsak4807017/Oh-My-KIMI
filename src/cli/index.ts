@@ -167,6 +167,25 @@ function getNestedValue(target: Record<string, any>, key: string): unknown {
   return cursor;
 }
 
+function redactConfig(value: unknown): unknown {
+  if (Array.isArray(value)) {
+    return value.map(item => redactConfig(item));
+  }
+  if (!value || typeof value !== 'object') {
+    return value;
+  }
+
+  const result: Record<string, unknown> = {};
+  for (const [key, child] of Object.entries(value as Record<string, unknown>)) {
+    if (/apiKey|api_key|token|secret|password/i.test(key) && typeof child === 'string' && child) {
+      result[key] = '[redacted]';
+    } else {
+      result[key] = redactConfig(child);
+    }
+  }
+  return result;
+}
+
 /**
  * Get effective OMK path - prefers local, falls back to global
  */
@@ -391,7 +410,7 @@ async function configCommand(args: string[]): Promise<void> {
     }, process.cwd());
 
     console.log('Effective config:');
-    console.log(TOML.stringify(effective as any).trim() || '(empty)');
+    console.log(TOML.stringify(redactConfig(effective) as any).trim() || '(empty)');
     console.log('\nResolved provider:');
     console.log(JSON.stringify({
       type: resolved.type,

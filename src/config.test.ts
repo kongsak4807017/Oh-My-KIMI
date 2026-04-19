@@ -76,3 +76,27 @@ apiKeyEnv = "OPENROUTER_API_KEY"
     rmSync(cwd, { recursive: true, force: true });
   }
 });
+
+test('resolveProviderConfig treats accidental apiKeyEnv secret as apiKey', () => {
+  const cwd = mkdtempSync(join(tmpdir(), 'omk-config-key-'));
+
+  try {
+    mkdirSync(join(cwd, '.omk'), { recursive: true });
+    writeFileSync(join(cwd, '.omk', 'config.toml'), `
+provider = "openrouter"
+
+[providers.openrouter]
+baseUrl = "https://openrouter.ai/api/v1"
+model = "router/model"
+apiKeyEnv = "sk-test"
+`);
+
+    const config = resolveProviderConfig({}, cwd);
+
+    assert.equal(config.type, 'openrouter');
+    assert.equal(config.apiKey, 'sk-test');
+    assert.equal(config.apiKeyEnv, undefined);
+  } finally {
+    rmSync(cwd, { recursive: true, force: true });
+  }
+});

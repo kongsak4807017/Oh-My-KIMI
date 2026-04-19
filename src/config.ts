@@ -14,6 +14,7 @@ import { ProviderConfig, ProviderType, ReasoningEffort } from './providers/types
 export interface OMKConfig {
   provider?: ProviderType;
   model?: string;
+  apiKey?: string;
   baseUrl?: string;
   apiKeyEnv?: string;
   reasoning?: ReasoningEffort;
@@ -25,7 +26,8 @@ export interface OMKConfig {
 function readConfig(path: string): OMKConfig {
   if (!existsSync(path)) return {};
   try {
-    return TOML.parse(readFileSync(path, 'utf-8')) as OMKConfig;
+    const content = readFileSync(path, 'utf-8').replace(/^\uFEFF/, '');
+    return TOML.parse(content) as OMKConfig;
   } catch (err) {
     throw new Error(`Failed to parse config ${path}: ${err instanceof Error ? err.message : String(err)}`);
   }
@@ -56,6 +58,18 @@ function definedOnly<T extends Record<string, unknown>>(input: T): Partial<T> {
   ) as Partial<T>;
 }
 
+function normalizeProviderOverride(config: Partial<ProviderConfig>): Partial<ProviderConfig> {
+  const normalized = { ...config };
+  const maybeKey = normalized.apiKeyEnv?.trim();
+
+  if (maybeKey && /^(sk-|or-|pk-)/i.test(maybeKey)) {
+    normalized.apiKey = maybeKey;
+    delete normalized.apiKeyEnv;
+  }
+
+  return normalized;
+}
+
 export function loadOMKConfig(cwd: string = process.cwd()): OMKConfig {
   const globalPath = join(homedir(), '.omk', 'config.toml');
   const projectPath = join(cwd, '.omk', 'config.toml');
@@ -69,14 +83,16 @@ export function resolveProviderConfig(
   const fileConfig = loadOMKConfig(cwd);
   const cleanRequested = definedOnly(requested as Record<string, unknown>) as Partial<ProviderConfig>;
   const requestedType = cleanRequested.type ?? fileConfig.provider ?? 'auto';
-  const providerOverride = fileConfig.providers?.[requestedType] ?? {};
+  const providerOverride = normalizeProviderOverride(fileConfig.providers?.[requestedType] ?? {});
+  const normalizedFileConfig = normalizeProviderOverride(fileConfig as Partial<ProviderConfig>);
 
   return {
     type: requestedType,
     reasoning: fileConfig.reasoning,
     model: fileConfig.model,
-    baseUrl: fileConfig.baseUrl,
-    apiKeyEnv: fileConfig.apiKeyEnv,
+    apiKey: normalizedFileConfig.apiKey,
+    baseUrl: normalizedFileConfig.baseUrl,
+    apiKeyEnv: normalizedFileConfig.apiKeyEnv,
     ...providerOverride,
     ...cleanRequested,
     headers: {
