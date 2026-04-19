@@ -1,6 +1,9 @@
 /**
- * Activity Logger - REPL activity HUD inspired by OMX.
- * Shows which agent/lane is active and what it is doing.
+ * Activity Logger for the REPL.
+ *
+ * Default mode is intentionally non-intrusive: it never rewinds the cursor or
+ * redraws a boxed HUD over the input area. Set OMK_HUD=full to restore the
+ * old dashboard renderer for debugging.
  */
 
 import { stdout } from 'process';
@@ -32,6 +35,8 @@ export class ActivityLogger {
   private spinnerInterval?: NodeJS.Timeout;
   private renderedLines = 0;
   private dashboard = getDashboardState();
+  private readonly fullHud = process.env.OMK_HUD === 'full';
+  private lastCompactLine = '';
 
   configure(cwd: string): void {
     this.dashboard.configure(cwd);
@@ -40,7 +45,9 @@ export class ActivityLogger {
   start(): void {
     if (this.isActive) return;
     this.isActive = true;
-    this.startSpinner();
+    if (this.fullHud) {
+      this.startSpinner();
+    }
   }
 
   stop(): void {
@@ -49,7 +56,9 @@ export class ActivityLogger {
       clearInterval(this.spinnerInterval);
       this.spinnerInterval = undefined;
     }
-    this.render();
+    if (this.fullHud) {
+      this.renderFullHud();
+    }
   }
 
   addActivity(activity: Omit<Activity, 'id' | 'timestamp'>): Activity {
@@ -65,7 +74,7 @@ export class ActivityLogger {
     }
 
     this.dashboard.updateFromActivity(fullActivity);
-    this.render();
+    this.render(fullActivity);
     return fullActivity;
   }
 
@@ -75,7 +84,7 @@ export class ActivityLogger {
 
     Object.assign(activity, updates);
     this.dashboard.updateFromActivity(activity);
-    this.render();
+    this.render(activity);
   }
 
   showSummary(): void {
@@ -92,29 +101,85 @@ export class ActivityLogger {
     this.activities = [];
     this.dashboard.clear();
     this.stop();
+    this.lastCompactLine = '';
   }
 
   private startSpinner(): void {
     this.spinnerInterval = setInterval(() => {
       if (!this.isActive) return;
       this.spinnerIndex = (this.spinnerIndex + 1) % this.spinnerFrames.length;
-      this.render();
-    }, 100);
+      this.renderFullHud();
+    }, 200);
   }
 
-  private render(): void {
-    const running = this.activities.filter(activity => activity.status === 'running');
-    const latestRunning = running.length > 0 ? running[running.length - 1] : undefined;
-    const spinner = this.isActive && latestRunning ? this.spinnerFrames[this.spinnerIndex] : undefined;
-    const lines = this.dashboard.getRenderLines(stdout.columns || 100, spinner);
+  private isRendering = false;
 
-    if (latestRunning?.details) {
-      lines[lines.length - 2] = this.injectEventDetail(lines[lines.length - 2], latestRunning.details, stdout.columns || 100);
+  private render(activity: Activity): void {
+    if (this.fullHud) {
+      this.renderFullHud();
+      return;
     }
 
-    this.rewind();
-    stdout.write(lines.join('\n') + '\n');
-    this.renderedLines = lines.length;
+    this.renderCompact(activity);
+  }
+
+  private renderCompact(activity: Activity): void {
+    if (!stdout.isTTY) return;
+
+    if (activity.status === 'completed' && activity.type !== 'complete' && activity.type !== 'tool_result') {
+      return;
+    }
+
+    if (activity.message.startsWith('Streaming progress:')) {
+      return;
+    }
+
+    const label = activity.status === 'running'
+      ? 'running'
+      : activity.status === 'failed'
+        ? 'error'
+        : activity.type === 'complete'
+          ? 'done'
+          : activity.type === 'tool_result'
+            ? 'tool'
+            : 'info';
+
+    const actor = activity.agent
+      ? `${activity.agent}${activity.role ? `/${activity.role}` : ''}`
+      : activity.role ?? 'omk';
+    const detail = activity.details ? ` - ${this.clean(activity.details, 80)}` : '';
+    const line = `[${label}] ${actor}: ${this.clean(activity.message, 90)}${detail}`;
+
+    if (line === this.lastCompactLine) return;
+    this.lastCompactLine = line;
+
+    stdout.write(`\x1b[90m${line}\x1b[0m\n`);
+  }
+
+  private clean(text: string, maxLength: number): string {
+    const clean = text.replace(/\s+/g, ' ').trim();
+    return clean.length > maxLength ? `${clean.slice(0, Math.max(0, maxLength - 3))}...` : clean;
+  }
+
+  private renderFullHud(): void {
+    if (this.isRendering) return;
+    this.isRendering = true;
+    try {
+      const running = this.activities.filter(activity => activity.status === 'running');
+      const latestRunning = running.length > 0 ? running[running.length - 1] : undefined;
+      const spinner = this.isActive && latestRunning ? this.spinnerFrames[this.spinnerIndex] : undefined;
+      const lines = this.dashboard.getRenderLines(stdout.columns || 100, spinner);
+
+      if (latestRunning?.details) {
+        lines[lines.length - 2] = this.injectEventDetail(lines[lines.length - 2], latestRunning.details, stdout.columns || 100);
+      }
+
+      this.rewind();
+      stdout.write(lines.join('\n') + '\n');
+      this.renderedLines = lines.length;
+    } finally {
+      this.isRendering = false;
+    }
   }
 
   private injectEventDetail(eventLine: string, detail: string, width: number): string {
@@ -127,9 +192,17 @@ export class ActivityLogger {
   private rewind(): void {
     if (this.renderedLines <= 0) return;
 
-    for (let index = 0; index < this.renderedLines; index++) {
-      stdout.write('\x1b[1A\r\x1b[2K');
+    // Move cursor up to the first line of the previously rendered block
+    stdout.write(`\x1b[${this.renderedLines}A`);
+    // Clear each line from the saved position
+    for (let i = 0; i < this.renderedLines; i++) {
+      stdout.write('\x1b[2K');
+      if (i < this.renderedLines - 1) {
+        stdout.write('\x1b[1B');
+      }
     }
+    // Return to the beginning of the first cleared line
+    stdout.write('\r');
   }
 }
 
