@@ -12,25 +12,25 @@ export const StatusHud: React.FC<StatusHudProps> = ({ agent, role, phase, task }
   return (
     <Box
       flexDirection="column"
-      borderStyle="round"
+      borderStyle="single"
       borderColor="cyan"
       paddingX={1}
       marginBottom={1}
     >
-      <Box>
-        <Text bold color="cyan">CURRENT HUD</Text>
+      <Box justifyContent="space-between">
+        <Box>
+          <Text bold color="cyan">STATUS</Text>
+          <Text color="gray"> / </Text>
+          <Text color="green">{agent}</Text>
+          <Text color="gray"> [{role}]</Text>
+        </Box>
+        <Box>
+          <Text color="gray">phase </Text>
+          <Text color="yellow">{phase}</Text>
+        </Box>
       </Box>
       <Box>
-        <Text color="gray">Agent: </Text>
-        <Text color="green">{agent}</Text>
-        <Text color="gray"> [{role}]</Text>
-      </Box>
-      <Box>
-        <Text color="gray">Phase: </Text>
-        <Text color="yellow">{phase}</Text>
-      </Box>
-      <Box>
-        <Text color="gray">Task: </Text>
+        <Text color="gray">task </Text>
         <Text wrap="truncate-end">{task}</Text>
       </Box>
     </Box>

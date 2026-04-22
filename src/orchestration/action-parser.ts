@@ -14,6 +14,8 @@ const KNOWN_TOOLS = [
   '$list_directory',
   '$search_files',
   '$web_fetch',
+  '$web_search',
+  '$rag_search',
   '$diagnostics',
   '$document_symbols',
   '$find_references',
@@ -89,6 +91,8 @@ function extractFromLine(line: string): ParsedAction | null {
       if (tool === '$list_directory') return { tool, args: { path: firstToken } };
       if (tool === '$search_files') return { tool, args: { path: '.', pattern: firstToken } };
       if (tool === '$web_fetch') return { tool, args: { url: firstToken } };
+      if (tool === '$web_search') return { tool, args: { query: afterTool } };
+      if (tool === '$rag_search') return { tool, args: { query: afterTool } };
       if (tool === '$diagnostics') return { tool, args: { file: firstToken } };
       if (tool === '$document_symbols') return { tool, args: { file: firstToken } };
       if (tool === '$execute_command') return { tool, args: { command: afterTool } };

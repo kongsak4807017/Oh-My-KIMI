@@ -3,14 +3,15 @@
  * Full-featured CLI interface with real-time updates
  */
 
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useMemo } from 'react';
 import { Box, Text, useApp, useInput, useStdout } from 'ink';
+import { readdirSync } from 'fs';
+import { join } from 'path';
 import { resolveExecutionProfile } from '../orchestration/phase-map.js';
 // Simple spinner component since ink-spinner has compatibility issues
 const Spinner = ({ type = 'dots' }: { type?: string }) => {
   const [frame, setFrame] = useState(0);
-  const frames = type === 'dots' ? ['⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦', '⠧', '⠇', '⠏'] : 
-                 ['◐', '◓', '◑', '◒'];
+  const frames = type === 'dots' ? ['.', 'o', 'O', 'o'] : ['-', '\\', '|', '/'];
   
   useEffect(() => {
     const timer = setInterval(() => {
@@ -27,12 +28,127 @@ import { Footer } from './components/Footer.js';
 import { AgentPanel } from './components/AgentPanel.js';
 import { StatusHud } from './components/StatusHud.js';
 import { ProviderManager } from '../providers/index.js';
-import { Agent, Activity } from './types.js';
+import { Agent, Activity, TokenUsage } from './types.js';
+import { listAvailableSkills } from '../skills/runtime.js';
+
+interface Suggestion {
+  value: string;
+  display: string;
+  hint: string;
+  kind: 'command' | 'tool' | 'skill' | 'file';
+}
+
+const TOKEN_LIMIT = 262144;
+
+const COMMAND_SUGGESTIONS: Suggestion[] = [
+  { value: '/help', display: '/help', hint: 'show commands', kind: 'command' },
+  { value: '/skills', display: '/skills', hint: 'list workflows', kind: 'command' },
+  { value: '/tools', display: '/tools', hint: 'list tools', kind: 'command' },
+  { value: '/model', display: '/model', hint: 'switch provider', kind: 'command' },
+  { value: '/status', display: '/status', hint: 'session status', kind: 'command' },
+  { value: '/settings', display: '/settings', hint: 'provider and cwd', kind: 'command' },
+  { value: '/tokens', display: '/tokens', hint: 'token usage', kind: 'command' },
+  { value: '/rag', display: '/rag', hint: 'compact retrieval', kind: 'command' },
+  { value: '/file', display: '/file', hint: 'add context file', kind: 'command' },
+  { value: '/context', display: '/context', hint: 'show context', kind: 'command' },
+  { value: '/exit', display: '/exit', hint: 'quit OMK', kind: 'command' },
+];
+
+const TOOL_SUGGESTIONS: Suggestion[] = [
+  { value: '$read_file', display: '$read_file', hint: 'read file', kind: 'tool' },
+  { value: '$write_file', display: '$write_file', hint: 'write file', kind: 'tool' },
+  { value: '$list_directory', display: '$list_directory', hint: 'list directory', kind: 'tool' },
+  { value: '$search_files', display: '$search_files', hint: 'search files', kind: 'tool' },
+  { value: '$execute_command', display: '$execute_command', hint: 'run command', kind: 'tool' },
+  { value: '$diagnostics', display: '$diagnostics', hint: 'type diagnostics', kind: 'tool' },
+  { value: '$web_fetch', display: '$web_fetch', hint: 'fetch URL', kind: 'tool' },
+  { value: '$web_search', display: '$web_search', hint: 'search web', kind: 'tool' },
+  { value: '$rag_search', display: '$rag_search', hint: 'compact retrieval', kind: 'tool' },
+  { value: '$memory_read', display: '$memory_read', hint: 'read memory', kind: 'tool' },
+  { value: '$memory_write', display: '$memory_write', hint: 'write memory', kind: 'tool' },
+];
+
+function estimateTokens(text: string): number {
+  if (!text) return 0;
+  return Math.max(1, Math.ceil(text.length / 4));
+}
+
+function findFiles(cwd: string, search: string, limit = 12): Suggestion[] {
+  const results: Suggestion[] = [];
+  const ignored = new Set(['.git', 'node_modules', 'dist', 'build', 'coverage', '.next', '.nuxt']);
+
+  const walk = (dir: string, relative: string, depth: number) => {
+    if (results.length >= limit || depth > 4) return;
+
+    let entries;
+    try {
+      entries = readdirSync(dir, { withFileTypes: true });
+    } catch {
+      return;
+    }
+
+    for (const entry of entries) {
+      if (results.length >= limit) return;
+      if (ignored.has(entry.name)) continue;
+
+      const rel = relative ? `${relative}/${entry.name}` : entry.name;
+      const lower = rel.toLowerCase();
+      const matches = !search || lower.includes(search.toLowerCase());
+
+      if (entry.isDirectory()) {
+        if (matches) {
+          results.push({ value: `@${rel}/`, display: `@${rel}/`, hint: 'directory', kind: 'file' });
+        }
+        walk(join(dir, entry.name), rel, depth + 1);
+      } else if (entry.isFile() && matches) {
+        results.push({ value: `@${rel}`, display: `@${rel}`, hint: 'file', kind: 'file' });
+      }
+    }
+  };
+
+  walk(cwd, '', 0);
+  return results;
+}
+
+function buildSuggestions(input: string, cwd: string, skills: string[]): Suggestion[] {
+  const trimmed = input.trimStart();
+
+  if (trimmed.startsWith('/')) {
+    return COMMAND_SUGGESTIONS
+      .filter(item => item.value.startsWith(trimmed))
+      .slice(0, 8);
+  }
+
+  if (trimmed.startsWith('$')) {
+    const skillSuggestions = skills.map((skill): Suggestion => ({
+      value: `$${skill}`,
+      display: `$${skill}`,
+      hint: 'skill',
+      kind: 'skill',
+    }));
+    return [...TOOL_SUGGESTIONS, ...skillSuggestions]
+      .filter(item => item.value.startsWith(trimmed))
+      .slice(0, 8);
+  }
+
+  const atIndex = input.lastIndexOf('@');
+  if (atIndex >= 0) {
+    const token = input.slice(atIndex + 1).split(/\s/)[0] ?? '';
+    const before = input.slice(0, atIndex);
+    return findFiles(cwd, token).map(item => ({
+      ...item,
+      value: `${before}${item.value}`,
+    }));
+  }
+
+  return [];
+}
 
 interface TUIProps {
   cwd: string;
   providerManager: ProviderManager;
   reasoning?: 'low' | 'medium' | 'high';
+  model?: string;
   yolo?: boolean;
 }
 
@@ -40,6 +156,7 @@ export const OMKApp: React.FC<TUIProps> = ({
   cwd, 
   providerManager, 
   reasoning = 'medium',
+  model,
   yolo = false 
 }) => {
   const { exit } = useApp();
@@ -49,12 +166,30 @@ export const OMKApp: React.FC<TUIProps> = ({
   const [input, setInput] = useState('');
   const [mode, setMode] = useState<'chat' | 'plan' | 'agent'>('chat');
   const [showAgents, setShowAgents] = useState(true);
-  const [contextUsage, setContextUsage] = useState({ used: 0, total: 262144, percentage: 0 });
+  const [contextUsage, setContextUsage] = useState({ used: 0, total: TOKEN_LIMIT, percentage: 0 });
+  const [tokenUsage, setTokenUsage] = useState<TokenUsage>({
+    input: 0,
+    output: 0,
+    context: 0,
+    total: 0,
+    limit: TOKEN_LIMIT,
+    routes: ['input', 'provider', 'output'],
+  });
+  const [selectedSuggestion, setSelectedSuggestion] = useState(0);
   const [isProcessing, setIsProcessing] = useState(false);
   const [messages, setMessages] = useState<Array<{ role: 'user' | 'assistant' | 'system'; content: string; timestamp: Date }>>([]);
   const [agents, setAgents] = useState<Agent[]>([]);
   const [activities, setActivities] = useState<Activity[]>([]);
   const [currentAgent, setCurrentAgent] = useState({ agent: 'idle', role: 'system', phase: 'waiting', task: 'Ready for input' });
+  const availableSkills = useMemo(() => listAvailableSkills(cwd), [cwd]);
+  const suggestions = useMemo(
+    () => buildSuggestions(input, cwd, availableSkills),
+    [input, cwd, availableSkills],
+  );
+
+  useEffect(() => {
+    setSelectedSuggestion(0);
+  }, [input]);
   
   // Terminal dimensions
   const [dimensions, setDimensions] = useState({ 
@@ -93,6 +228,13 @@ export const OMKApp: React.FC<TUIProps> = ({
     if (lower.includes('refactor')) return 'refactoring';
     return 'general-chat';
   };
+
+  const acceptSuggestion = () => {
+    const suggestion = suggestions[selectedSuggestion];
+    if (!suggestion) return false;
+    setInput(suggestion.value);
+    return true;
+  };
   
   // Keyboard handlers
   useInput((inputStr, key) => {
@@ -114,9 +256,24 @@ export const OMKApp: React.FC<TUIProps> = ({
       return;
     }
     
-    // Shift+Tab to toggle agent panel (use 'z' as alternative)
-    if (key.shift && inputStr === 'z') {
+    // Shift+Tab to toggle agent panel.
+    if ((key as any).tab && (key as any).shift) {
       setShowAgents(prev => !prev);
+      return;
+    }
+
+    if ((key as any).tab && suggestions.length > 0) {
+      acceptSuggestion();
+      return;
+    }
+
+    if ((key as any).upArrow && suggestions.length > 0) {
+      setSelectedSuggestion(prev => Math.max(0, prev - 1));
+      return;
+    }
+
+    if ((key as any).downArrow && suggestions.length > 0) {
+      setSelectedSuggestion(prev => Math.min(suggestions.length - 1, prev + 1));
       return;
     }
     
@@ -138,9 +295,41 @@ export const OMKApp: React.FC<TUIProps> = ({
     
     try {
       const provider = providerManager.getProvider();
+      const providerType = providerManager.getCurrentType() || 'unknown';
       let response = '';
       const taskType = detectTaskType(text);
       const profile = resolveExecutionProfile({ taskType, cwd });
+      const systemMessage = { role: 'system' as const, content: 'You are OMK, a helpful AI assistant.' };
+      const historyMessages = messages.slice(-10).map(m => ({ role: m.role, content: m.content }));
+      const requestMessages = [
+        systemMessage,
+        ...historyMessages,
+        { role: 'user' as const, content: text },
+      ];
+      const inputTokens = estimateTokens(text);
+      const contextTokens = estimateTokens(systemMessage.content) +
+        historyMessages.reduce((sum, message) => sum + estimateTokens(message.content), 0);
+      const initialTotal = inputTokens + contextTokens;
+      const initialRoutes = [
+        `input:${inputTokens}`,
+        `system:${estimateTokens(systemMessage.content)}`,
+        `history:${historyMessages.length}`,
+        providerType,
+        'output:0',
+      ];
+      setTokenUsage({
+        input: inputTokens,
+        output: 0,
+        context: contextTokens,
+        total: initialTotal,
+        limit: TOKEN_LIMIT,
+        routes: initialRoutes,
+      });
+      setContextUsage({
+        used: initialTotal,
+        total: TOKEN_LIMIT,
+        percentage: Math.min((initialTotal / TOKEN_LIMIT) * 100, 100),
+      });
       const routerPhases = ['routing', 'handoff', 'complete'];
       const contextPhases = ['context', 'prompt-prep', 'complete'];
       const workerPhases = profile.phases;
@@ -167,22 +356,29 @@ export const OMKApp: React.FC<TUIProps> = ({
       addActivity({ type: 'agent', message: `${profile.agent} is ${profile.task}`, status: 'running', agentName: profile.agent, role: profile.role, phase: workerPhases[Math.min(2, workerPhases.length - 1)] });
 
       for await (const chunk of provider.stream({
-        messages: [
-          { role: 'system', content: 'You are OMK, a helpful AI assistant.' },
-          ...messages.slice(-10).map(m => ({ role: m.role, content: m.content })),
-          { role: 'user', content: text },
-        ],
+        messages: requestMessages,
       })) {
         response += chunk.content;
-        
-        // Update context usage
-        setContextUsage(prev => {
-          const newUsed = prev.used + chunk.content.length;
-          return {
-            ...prev,
-            used: newUsed,
-            percentage: Math.min((newUsed / prev.total) * 100, 100),
-          };
+        const outputTokens = estimateTokens(response);
+        const totalTokens = inputTokens + contextTokens + outputTokens;
+
+        setTokenUsage({
+          input: inputTokens,
+          output: outputTokens,
+          context: contextTokens,
+          total: totalTokens,
+          limit: TOKEN_LIMIT,
+          routes: [
+            `input:${inputTokens}`,
+            `context:${contextTokens}`,
+            providerType,
+            `output:${outputTokens}`,
+          ],
+        });
+        setContextUsage({
+          used: totalTokens,
+          total: TOKEN_LIMIT,
+          percentage: Math.min((totalTokens / TOKEN_LIMIT) * 100, 100),
         });
       }
       
@@ -217,11 +413,13 @@ export const OMKApp: React.FC<TUIProps> = ({
   };
   
   // Layout calculations
-  const headerHeight = 3;
-  const footerHeight = 3;
-  const agentPanelWidth = showAgents ? 35 : 0;
+  const headerHeight = 4;
+  const footerHeight = 5;
+  const effectiveShowAgents = showAgents && dimensions.width >= 96;
+  const agentPanelWidth = effectiveShowAgents ? Math.min(40, Math.max(32, Math.floor(dimensions.width * 0.28))) : 0;
   const mainWidth = dimensions.width - agentPanelWidth;
   const mainHeight = dimensions.height - headerHeight - footerHeight;
+  const maxVisibleMessages = Math.max(1, mainHeight - (suggestions.length > 0 ? 12 : 7));
   
   return (
     <Box flexDirection="column" height={dimensions.height}>
@@ -229,6 +427,8 @@ export const OMKApp: React.FC<TUIProps> = ({
         mode={mode} 
         reasoning={reasoning} 
         provider={providerManager.getCurrentType() || 'unknown'}
+        model={model}
+        cwd={cwd}
         yolo={yolo}
       />
       
@@ -248,14 +448,14 @@ export const OMKApp: React.FC<TUIProps> = ({
 
           {/* Messages */}
           <Box flexDirection="column" flexGrow={1} overflow="hidden">
-            {messages.slice(-(mainHeight - 5)).map((msg, idx) => (
+            {messages.slice(-maxVisibleMessages).map((msg, idx) => (
               <Box key={idx} marginY={0} flexDirection="column">
                 <Box>
                   <Text 
                     color={msg.role === 'user' ? 'cyan' : msg.role === 'assistant' ? 'green' : 'yellow'}
                     bold={msg.role === 'user'}
                   >
-                    {msg.role === 'user' ? '► ' : msg.role === 'assistant' ? '◄ ' : '⚠ '}
+                    {msg.role === 'user' ? 'user ' : msg.role === 'assistant' ? 'omk  ' : 'sys  '}
                   </Text>
                   <Text wrap="wrap">{msg.content}</Text>
                 </Box>
@@ -272,6 +472,40 @@ export const OMKApp: React.FC<TUIProps> = ({
             )}
           </Box>
           
+          {suggestions.length > 0 && (
+            <Box
+              flexDirection="column"
+              borderStyle="single"
+              borderColor="gray"
+              paddingX={1}
+              marginTop={1}
+            >
+              <Box justifyContent="space-between">
+                <Text color="gray">Suggestions</Text>
+                <Text color="gray">/ @ $</Text>
+              </Box>
+              {suggestions.slice(0, 5).map((suggestion, idx) => {
+                const selected = idx === selectedSuggestion;
+                const color = suggestion.kind === 'command'
+                  ? 'cyan'
+                  : suggestion.kind === 'file'
+                    ? 'green'
+                    : suggestion.kind === 'skill'
+                      ? 'magenta'
+                      : 'yellow';
+                return (
+                  <Box key={`${suggestion.value}-${idx}`}>
+                    <Text color={selected ? 'black' : color} backgroundColor={selected ? color : undefined}>
+                      {selected ? '> ' : '  '}
+                      {suggestion.display}
+                    </Text>
+                    <Text color="gray">  {suggestion.hint}</Text>
+                  </Box>
+                );
+              })}
+            </Box>
+          )}
+
           {/* Input Area */}
           <Box marginTop={1} flexDirection="row">
             <Text color="green" bold>omk </Text>
@@ -279,13 +513,13 @@ export const OMKApp: React.FC<TUIProps> = ({
             <TextInput 
               value={input} 
               onChange={setInput}
-              placeholder="Type a message..."
+              placeholder="Ask OMK, run /help, or invoke $plan..."
             />
           </Box>
         </Box>
         
         {/* Agent Panel */}
-        {showAgents && (
+        {effectiveShowAgents && (
           <AgentPanel 
             agents={agents}
             activities={activities}
@@ -297,7 +531,8 @@ export const OMKApp: React.FC<TUIProps> = ({
       <Footer 
         mode={mode}
         contextUsage={contextUsage}
-        showAgents={showAgents}
+        tokenUsage={tokenUsage}
+        showAgents={effectiveShowAgents}
       />
     </Box>
   );

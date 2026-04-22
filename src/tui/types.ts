@@ -30,3 +30,12 @@ export interface ContextUsage {
   total: number;
   percentage: number;
 }
+
+export interface TokenUsage {
+  input: number;
+  output: number;
+  context: number;
+  total: number;
+  limit: number;
+  routes: string[];
+}

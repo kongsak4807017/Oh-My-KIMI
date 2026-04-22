@@ -7,6 +7,7 @@
 - Git for development installs
 - Optional: tmux for native pane-based team mode on macOS/Linux
 - Optional: Playwright for browser provider mode
+- Optional: Kimi CLI, Gemini CLI, or Codex CLI for OAuth-backed provider mode
 
 ## Install From GitHub
 
@@ -62,6 +63,19 @@ export KIMI_API_KEY="your_key"
 omk --kimi
 ```
 
+OAuth-backed native CLIs:
+
+```bash
+codex login
+omk --codex-cli
+
+gemini
+omk --gemini-cli
+
+kimi login
+omk --kimi-cli
+```
+
 Project config:
 
 ```toml
@@ -72,6 +86,9 @@ model = "openai/gpt-4o-mini"
 [providers.openrouter]
 baseUrl = "https://openrouter.ai/api/v1"
 apiKeyEnv = "OPENROUTER_API_KEY"
+
+[providers.codex-cli]
+cliPath = "codex"
 ```
 
 ## Verify
@@ -92,7 +109,11 @@ Check that the npm global bin directory is on `PATH`, then reinstall or run `npm
 
 `API key not set`
 
-Set the provider-specific key or pass `--api-key-env <ENV_NAME>`.
+Set the provider-specific key, pass `--api-key-env <ENV_NAME>`, or use an OAuth CLI provider such as `--codex-cli`, `--gemini-cli`, or `--kimi-cli`.
+
+`OAuth CLI provider fails`
+
+Run the native CLI once and finish login first: `codex login`, `gemini`, or `kimi login`. OMK reuses that CLI session and does not copy tokens into `.omk`.
 
 `Custom API mode fails`
 

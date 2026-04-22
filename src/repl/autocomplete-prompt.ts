@@ -1,92 +1,126 @@
 /**
- * Interactive Autocomplete Prompt
- * Custom implementation for IDE-style autocomplete
+ * Interactive Autocomplete Prompt with Assist Suggestions
+ * Custom implementation for IDE-style autocomplete with comprehensive guides
  */
 
 import { stdin, stdout } from 'process';
 import { readdirSync, Dirent } from 'fs';
 import { join, extname } from 'path';
+import {
+  AssistItem,
+  getAssistGuide,
+  searchAssistItems,
+  formatAssistItems,
+  getDetailedHelp,
+  discoverAllSkills,
+  getAllTools,
+  getAllCommands,
+} from './assist-suggestion.js';
 
-export interface Suggestion {
-  value: string;
-  display: string;
-  hint?: string;
-  type: 'command' | 'tool' | 'file' | 'skill';
+export { Suggestion } from './assist-suggestion.js';
+export type { AssistItem };
+
+// Unicode grapheme and width helpers
+const segmenter = typeof Intl !== 'undefined' && 'Segmenter' in Intl
+  ? new (Intl as any).Segmenter('en', { granularity: 'grapheme' })
+  : null;
+
+function getGraphemeClusters(str: string): string[] {
+  if (segmenter) {
+    return Array.from(segmenter.segment(str), (s: any) => s.segment);
+  }
+  return Array.from(str);
 }
 
+function isZeroWidth(code: number): boolean {
+  return (
+    code === 0x200B ||
+    code === 0x200C ||
+    code === 0x200D ||
+    code === 0xFEFF ||
+    (code >= 0x0300 && code <= 0x036F) ||
+    (code >= 0x1AB0 && code <= 0x1AFF) ||
+    (code >= 0x1DC0 && code <= 0x1DFF) ||
+    (code >= 0x20D0 && code <= 0x20FF) ||
+    (code >= 0xFE20 && code <= 0xFE2F) ||
+    (code >= 0x0E31 && code <= 0x0E3A) ||
+    (code >= 0x0E47 && code <= 0x0E4E)
+  );
+}
+
+function isFullWidth(code: number): boolean {
+  return (
+    (code >= 0x1100 && code <= 0x115F) ||
+    (code >= 0x2E80 && code <= 0xA4CF && code !== 0x303F) ||
+    (code >= 0xAC00 && code <= 0xD7A3) ||
+    (code >= 0xF900 && code <= 0xFAFF) ||
+    (code >= 0xFE10 && code <= 0xFE19) ||
+    (code >= 0xFE30 && code <= 0xFE6F) ||
+    (code >= 0xFF00 && code <= 0xFF60) ||
+    (code >= 0xFFE0 && code <= 0xFFE6) ||
+    (code >= 0x20000 && code <= 0x2FFFD) ||
+    (code >= 0x30000 && code <= 0x3FFFD)
+  );
+}
+
+function getClusterWidth(cluster: string): number {
+  for (const char of cluster) {
+    const code = char.codePointAt(0) ?? 0;
+    if (isZeroWidth(code)) continue;
+    if (isFullWidth(code)) return 2;
+    return 1;
+  }
+  return 0;
+}
+
+function getStringWidth(str: string): number {
+  return getGraphemeClusters(str).reduce((sum, cluster) => sum + getClusterWidth(cluster), 0);
+}
+
+/**
+ * Enhanced Interactive Autocomplete with Assist Guide
+ */
 export class InteractiveAutocomplete {
   private cwd: string;
   private input: string = '';
   private cursor: number = 0;
-  private suggestions: Suggestion[] = [];
+  private suggestions: AssistItem[] = [];
   private selectedIndex: number = 0;
   private isActive: boolean = false;
   private resolvePromise: ((value: string) => void) | null = null;
-  private mode: 'normal' | 'command' | 'tool' | 'file' = 'normal';
+  private mode: 'normal' | 'command' | 'tool' | 'file' | 'guide' = 'normal';
+  private renderedLines: number = 0;
+  private showGuide: boolean = false;
+  private guideMode: string = '';
 
-  // Data
-  private readonly commands: Suggestion[] = [
-    { value: '/help', display: '/help', hint: 'Show all commands', type: 'command' },
-    { value: '/skills', display: '/skills', hint: 'List skills', type: 'command' },
-    { value: '/tools', display: '/tools', hint: 'List tools', type: 'command' },
-    { value: '/clear', display: '/clear', hint: 'Clear screen', type: 'command' },
-    { value: '/history', display: '/history', hint: 'Chat history', type: 'command' },
-    { value: '/save', display: '/save [name]', hint: 'Save session', type: 'command' },
-    { value: '/load', display: '/load [name]', hint: 'Load session', type: 'command' },
-    { value: '/note', display: '/note <text>', hint: 'Add note', type: 'command' },
-    { value: '/task', display: '/task <title>', hint: 'Create task', type: 'command' },
-    { value: '/file', display: '/file <path>', hint: 'Add to context', type: 'command' },
-    { value: '/files', display: '/files', hint: 'Context files', type: 'command' },
-    { value: '/context', display: '/context', hint: 'Full context', type: 'command' },
-    { value: '/tokens', display: '/tokens', hint: 'Token stats', type: 'command' },
-    { value: '/cache', display: '/cache', hint: 'Cache stats', type: 'command' },
-    { value: '/index', display: '/index', hint: 'Build index', type: 'command' },
-    { value: '/map', display: '/map', hint: 'Repository map', type: 'command' },
-    { value: '/search', display: '/search <symbol>', hint: 'Search symbols', type: 'command' },
-    { value: '/plugins', display: '/plugins', hint: 'List plugins', type: 'command' },
-    { value: '/mcp', display: '/mcp [start|stop]', hint: 'MCP server', type: 'command' },
-    { value: '/model', display: '/model [provider]', hint: 'Switch provider', type: 'command' },
-    { value: '/settings', display: '/settings', hint: 'Show settings', type: 'command' },
-    { value: '/status', display: '/status', hint: 'Show status', type: 'command' },
-    { value: '/reasoning', display: '/reasoning <level>', hint: 'low|medium|high', type: 'command' },
-    { value: '/memory', display: '/memory', hint: 'Project memory', type: 'command' },
-    { value: '/exit', display: '/exit', hint: 'Exit OMK', type: 'command' },
-    { value: '/quit', display: '/quit', hint: 'Exit OMK', type: 'command' },
-  ];
-
-  private readonly tools: Suggestion[] = [
-    { value: '$read_file', display: '$read_file', hint: 'Read file', type: 'tool' },
-    { value: '$write_file', display: '$write_file', hint: 'Write file', type: 'tool' },
-    { value: '$list_directory', display: '$list_directory', hint: 'List dir', type: 'tool' },
-    { value: '$search_files', display: '$search_files', hint: 'Search files', type: 'tool' },
-    { value: '$web_fetch', display: '$web_fetch', hint: 'Fetch URL', type: 'tool' },
-    { value: '$diagnostics', display: '$diagnostics', hint: 'TypeScript check', type: 'tool' },
-    { value: '$document_symbols', display: '$document_symbols', hint: 'Get symbols', type: 'tool' },
-    { value: '$find_references', display: '$find_references', hint: 'Find refs', type: 'tool' },
-    { value: '$execute_command', display: '$execute_command', hint: 'Run command', type: 'tool' },
-    { value: '$memory_read', display: '$memory_read', hint: 'Read memory', type: 'tool' },
-    { value: '$memory_write', display: '$memory_write', hint: 'Write memory', type: 'tool' },
-  ];
-
-  private readonly skills: Suggestion[] = [
-    { value: '$ralph', display: '$ralph', hint: 'Persistent task', type: 'skill' },
-    { value: '$team', display: '$team', hint: 'Multi-agent', type: 'skill' },
-    { value: '$plan', display: '$plan', hint: 'Create plan', type: 'skill' },
-    { value: '$deep-interview', display: '$deep-interview', hint: 'Requirements', type: 'skill' },
-    { value: '$autopilot', display: '$autopilot', hint: 'Full pipeline', type: 'skill' },
-    { value: '$code-review', display: '$code-review', hint: 'Review code', type: 'skill' },
-    { value: '$security-review', display: '$security-review', hint: 'Security audit', type: 'skill' },
-    { value: '$git-master', display: '$git-master', hint: 'Git ops', type: 'skill' },
-    { value: '$build-fix', display: '$build-fix', hint: 'Fix build', type: 'skill' },
-    { value: '$tdd', display: '$tdd', hint: 'Test-driven dev', type: 'skill' },
-    { value: '$analyze', display: '$analyze', hint: 'Analyze code', type: 'skill' },
-    { value: '$visual-verdict', display: '$visual-verdict', hint: 'Visual QA', type: 'skill' },
-    { value: '$cancel', display: '$cancel', hint: 'Cancel mode', type: 'skill' },
-    { value: '$help', display: '$help', hint: 'Skill help', type: 'skill' },
-  ];
+  // Cached data
+  private cachedSkills: AssistItem[] | null = null;
+  private cachedTools: AssistItem[] | null = null;
+  private cachedCommands: AssistItem[] | null = null;
 
   constructor(cwd: string) {
     this.cwd = cwd;
+  }
+
+  private getSkills(): AssistItem[] {
+    if (!this.cachedSkills) {
+      this.cachedSkills = discoverAllSkills(this.cwd);
+    }
+    return this.cachedSkills;
+  }
+
+  private getTools(): AssistItem[] {
+    if (!this.cachedTools) {
+      this.cachedTools = getAllTools();
+    }
+    return this.cachedTools;
+  }
+
+  private getCommands(): AssistItem[] {
+    if (!this.cachedCommands) {
+      this.cachedCommands = getAllCommands();
+    }
+    return this.cachedCommands;
   }
 
   /**
@@ -101,6 +135,9 @@ export class InteractiveAutocomplete {
       this.suggestions = [];
       this.selectedIndex = 0;
       this.mode = 'normal';
+      this.renderedLines = 0;
+      this.showGuide = false;
+      this.guideMode = '';
 
       this.setupInput();
       this.render();
@@ -141,25 +178,39 @@ export class InteractiveAutocomplete {
       return;
     }
 
-    // Tab - accept suggestion
+    // Tab - accept suggestion or toggle guide
     if (key === '\t') {
       if (this.suggestions.length > 0) {
         this.input = this.suggestions[this.selectedIndex].value;
-        this.cursor = this.input.length;
+        this.cursor = getStringWidth(this.input);
         this.updateSuggestions();
+        this.render();
+      } else if (this.showGuide) {
+        // Toggle guide off if tab pressed in guide mode with no selection
+        this.showGuide = false;
         this.render();
       }
       return;
     }
 
-    // Escape - cancel
+    // Ctrl+G - toggle guide mode
+    if (key === '\u0007') {
+      this.toggleGuide();
+      return;
+    }
+
+    // Escape - cancel or clear guide
     if (key === '\u001b' || charCode === 27) {
       if (key.length > 1 && (key[1] === '[' || key[1] === 'O')) {
         // Arrow key sequence
         this.handleArrowKey(key);
       } else {
-        // Just escape - clear suggestions
-        this.suggestions = [];
+        // Just escape - clear suggestions or guide
+        if (this.showGuide) {
+          this.showGuide = false;
+        } else if (this.suggestions.length > 0) {
+          this.suggestions = [];
+        }
         this.render();
       }
       return;
@@ -168,8 +219,26 @@ export class InteractiveAutocomplete {
     // Backspace
     if (charCode === 127 || charCode === 8) {
       if (this.cursor > 0) {
-        this.input = this.input.slice(0, this.cursor - 1) + this.input.slice(this.cursor);
-        this.cursor--;
+        const clusters = getGraphemeClusters(this.input);
+        let pos = 0;
+        let clusterIndex = 0;
+        for (let i = 0; i < clusters.length; i++) {
+          const w = getClusterWidth(clusters[i]);
+          if (pos + w > this.cursor) {
+            clusterIndex = i;
+            break;
+          }
+          pos += w;
+          clusterIndex = i + 1;
+        }
+        if (pos === this.cursor && clusterIndex > 0) {
+          clusterIndex--;
+        }
+        const removedWidth = getClusterWidth(clusters[clusterIndex]);
+        const before = clusters.slice(0, clusterIndex);
+        const after = clusters.slice(clusterIndex + 1);
+        this.input = before.join('') + after.join('');
+        this.cursor = Math.max(0, this.cursor - removedWidth);
         this.updateSuggestions();
         this.render();
       }
@@ -180,15 +249,37 @@ export class InteractiveAutocomplete {
     if (charCode === 21) {
       this.input = '';
       this.cursor = 0;
+      this.showGuide = false;
       this.updateSuggestions();
       this.render();
       return;
     }
 
-    // Regular character
-    if (charCode >= 32 && charCode < 127) {
-      this.input = this.input.slice(0, this.cursor) + key + this.input.slice(this.cursor);
-      this.cursor++;
+    // Ctrl+H - show help for current input
+    if (charCode === 8) {
+      this.showHelp();
+      return;
+    }
+
+    // Regular character (including Unicode/Thai)
+    // Accept any printable char except control chars we already handled
+    if (charCode >= 32 && charCode !== 127) {
+      const clusters = getGraphemeClusters(this.input);
+      let pos = 0;
+      let insertIndex = 0;
+      for (let i = 0; i < clusters.length; i++) {
+        const w = getClusterWidth(clusters[i]);
+        if (pos + w > this.cursor) {
+          insertIndex = i;
+          break;
+        }
+        pos += w;
+        insertIndex = i + 1;
+      }
+      const before = clusters.slice(0, insertIndex);
+      const after = clusters.slice(insertIndex);
+      this.input = before.join('') + key + after.join('');
+      this.cursor += getStringWidth(key);
       this.updateSuggestions();
       this.render();
     }
@@ -211,18 +302,71 @@ export class InteractiveAutocomplete {
         this.render();
       }
     } else if (key === '\u001b[C' || key === '\u001bOC') {
-      // Right - move cursor
-      if (this.cursor < this.input.length) {
-        this.cursor++;
+      // Right - move cursor to next grapheme boundary
+      const inputWidth = getStringWidth(this.input);
+      if (this.cursor < inputWidth) {
+        const clusters = getGraphemeClusters(this.input);
+        let pos = 0;
+        for (const cluster of clusters) {
+          const w = getClusterWidth(cluster);
+          if (pos + w > this.cursor) {
+            this.cursor = pos + w;
+            break;
+          }
+          pos += w;
+        }
         this.render();
       }
     } else if (key === '\u001b[D' || key === '\u001bOD') {
-      // Left - move cursor
+      // Left - move cursor to previous grapheme boundary
       if (this.cursor > 0) {
-        this.cursor--;
+        const clusters = getGraphemeClusters(this.input);
+        let pos = 0;
+        for (const cluster of clusters) {
+          const w = getClusterWidth(cluster);
+          if (pos + w >= this.cursor) {
+            this.cursor = pos;
+            break;
+          }
+          pos += w;
+        }
         this.render();
       }
     }
+  }
+
+  /**
+   * Toggle guide mode
+   */
+  private toggleGuide(): void {
+    if (this.input.startsWith('/')) {
+      this.showGuide = !this.showGuide;
+      this.guideMode = '/';
+      this.updateSuggestions();
+      this.render();
+    } else if (this.input.startsWith('$')) {
+      this.showGuide = !this.showGuide;
+      this.guideMode = '$';
+      this.updateSuggestions();
+      this.render();
+    } else {
+      // Show quick help for prefixes
+      this.showGuide = !this.showGuide;
+      this.guideMode = 'help';
+      this.render();
+    }
+  }
+
+  /**
+   * Show detailed help for current input
+   */
+  private showHelp(): void {
+    if (!this.input.trim()) return;
+    
+    const help = getDetailedHelp(this.input.trim(), this.cwd);
+    this.clearPreviousRender();
+    console.log('\n' + help + '\n');
+    this.render();
   }
 
   /**
@@ -233,17 +377,20 @@ export class InteractiveAutocomplete {
     
     if (input.startsWith('/')) {
       this.mode = 'command';
-      this.suggestions = this.commands.filter(cmd =>
-        cmd.value.startsWith(input) || 
-        cmd.value.includes(input.slice(1))
-      );
+      if (this.showGuide && this.guideMode === '/') {
+        // Show all commands in guide mode
+        this.suggestions = this.getCommands();
+      } else {
+        this.suggestions = searchAssistItems(input, this.cwd);
+      }
     } else if (input.startsWith('$')) {
       this.mode = 'tool';
-      const allTools = [...this.tools, ...this.skills];
-      this.suggestions = allTools.filter(tool =>
-        tool.value.startsWith(input) ||
-        tool.value.includes(input.slice(1))
-      );
+      if (this.showGuide && this.guideMode === '$') {
+        // Show all skills and tools in guide mode
+        this.suggestions = [...this.getSkills(), ...this.getTools()];
+      } else {
+        this.suggestions = searchAssistItems(input, this.cwd);
+      }
     } else if (input.includes('@')) {
       this.mode = 'file';
       const atIndex = input.lastIndexOf('@');
@@ -258,16 +405,16 @@ export class InteractiveAutocomplete {
     this.selectedIndex = 0;
     
     // Limit suggestions
-    if (this.suggestions.length > 10) {
-      this.suggestions = this.suggestions.slice(0, 10);
+    if (this.suggestions.length > 20) {
+      this.suggestions = this.suggestions.slice(0, 20);
     }
   }
 
   /**
    * Get file suggestions - recursive search all files
    */
-  private getFileSuggestions(searchTerm: string, prefix: string): Suggestion[] {
-    const suggestions: Suggestion[] = [];
+  private getFileSuggestions(searchTerm: string, prefix: string): AssistItem[] {
+    const suggestions: AssistItem[] = [];
     const added = new Set<string>();
     
     try {
@@ -297,7 +444,7 @@ export class InteractiveAutocomplete {
     dir: string,
     relativePath: string,
     searchTerm: string,
-    suggestions: Suggestion[],
+    suggestions: AssistItem[],
     added: Set<string>,
     prefix: string
   ): void {
@@ -378,64 +525,188 @@ export class InteractiveAutocomplete {
   }
 
   /**
+   * Clear previously rendered lines (handles wrapped input)
+   */
+  private clearPreviousRender(): void {
+    if (this.renderedLines <= 1) {
+      stdout.write('\x1b[2K\r');
+      return;
+    }
+    // Move to the beginning of the first rendered line
+    stdout.write('\r');
+    stdout.write(`\x1b[${this.renderedLines - 1}A`);
+    // Clear everything from cursor to end of screen
+    stdout.write('\x1b[J');
+  }
+
+  /**
+   * Render the guide/help panel
+   */
+  private renderGuide(): string[] {
+    const lines: string[] = [];
+    
+    if (this.guideMode === 'help') {
+      lines.push('\x1b[36m💡 Quick Guide\x1b[0m');
+      lines.push('');
+      lines.push('\x1b[90mPrefixes:\x1b[0m');
+      lines.push('  \x1b[36m/\x1b[0m - Commands for session, context, system');
+      lines.push('  \x1b[35m$\x1b[0m - Skills & Tools for task execution');
+      lines.push('  \x1b[32m@\x1b[0m - Reference files in your project');
+      lines.push('');
+      lines.push('\x1b[90mShortcuts:\x1b[0m');
+      lines.push('  \x1b[90mCtrl+G\x1b[0m - Toggle guide mode');
+      lines.push('  \x1b[90mTab\x1b[0m    - Accept suggestion');
+      lines.push('  \x1b[90mEsc\x1b[0m    - Clear suggestions');
+      lines.push('  \x1b[90m↑/↓\x1b[0m    - Navigate suggestions');
+      return lines;
+    }
+    
+    const guide = getAssistGuide(this.guideMode || this.input[0] || '/', this.cwd);
+    
+    lines.push(`\x1b[36m${guide.title}\x1b[0m \x1b[90m(${guide.items.length} items)\x1b[0m`);
+    lines.push(`\x1b[90m${guide.description}\x1b[0m`);
+    lines.push('');
+    
+    // Show categorized items
+    const grouped = new Map<string, AssistItem[]>();
+    for (const item of guide.items.slice(0, 15)) {
+      const cat = item.category || 'Other';
+      if (!grouped.has(cat)) grouped.set(cat, []);
+      grouped.get(cat)!.push(item);
+    }
+    
+    for (const [category, items] of grouped) {
+      lines.push(`\x1b[90m${category}:\x1b[0m`);
+      for (const item of items.slice(0, 5)) {
+        let icon = '  ';
+        if (item.type === 'command') icon = '\x1b[36m/ \x1b[0m';
+        else if (item.type === 'tool') icon = '\x1b[33m$ \x1b[0m';
+        else if (item.type === 'skill') icon = '\x1b[35m$ \x1b[0m';
+        
+        const display = item.display.padEnd(20);
+        const hint = item.hint ? `\x1b[90m${item.hint.slice(0, 30)}\x1b[0m` : '';
+        lines.push(`  ${icon}${display}${hint}`);
+      }
+      if (items.length > 5) {
+        lines.push(`  \x1b[90m... and ${items.length - 5} more\x1b[0m`);
+      }
+      lines.push('');
+    }
+    
+    lines.push('\x1b[90mPress Ctrl+G or Esc to close guide\x1b[0m');
+    return lines;
+  }
+
+  /**
    * Render prompt and suggestions
    */
   private render(): void {
-    // Clear lines
-    stdout.write('\x1b[2K\r');
-    
-    // Show prompt (without ANSI codes for position calc)
+    this.clearPreviousRender();
+
     const promptText = 'omk > ';
     const prompt = '\x1b[32momk\x1b[0m > ';
-    stdout.write(prompt);
-    
-    // Show input
-    stdout.write(this.input);
-    
-    // Position cursor (promptText.length = visible characters only)
-    const cursorCol = promptText.length + this.cursor + 1; // 1-based column
-    stdout.write(`\x1b[${cursorCol}G`);
-    
-    // Show suggestions
-    if (this.suggestions.length > 0) {
+    const termWidth = stdout.columns || 80;
+    const promptWidth = getStringWidth(promptText);
+    const inputWidth = getStringWidth(this.input);
+
+    // Print prompt and input
+    stdout.write(prompt + this.input);
+
+    // Calculate how many physical lines the input occupies
+    const totalVisibleWidth = promptWidth + inputWidth;
+    const inputLines = Math.max(1, Math.ceil(totalVisibleWidth / termWidth));
+    let totalLines = inputLines;
+
+    // Show guide if enabled
+    if (this.showGuide) {
       stdout.write('\n');
-      
-      for (let i = 0; i < this.suggestions.length; i++) {
-        const sug = this.suggestions[i];
-        const isSelected = i === this.selectedIndex;
-        
-        if (isSelected) {
-          stdout.write('\x1b[7m'); // Invert colors
-        }
-        
-        // Type indicator
-        let icon = '  ';
-        if (sug.type === 'command') icon = '\x1b[36m/ \x1b[0m';
-        else if (sug.type === 'tool') icon = '\x1b[33m$ \x1b[0m';
-        else if (sug.type === 'skill') icon = '\x1b[35m$ \x1b[0m';
-        else if (sug.type === 'file') icon = '\x1b[32m@ \x1b[0m';
-        
-        stdout.write(`${icon}${sug.display.padEnd(25)}`);
-        
-        if (sug.hint) {
-          stdout.write(`\x1b[90m${sug.hint}\x1b[0m`);
-        }
-        
-        if (isSelected) {
-          stdout.write('\x1b[0m'); // Reset
-        }
-        
-        if (i < this.suggestions.length - 1) {
+      const guideLines = this.renderGuide();
+      for (let i = 0; i < guideLines.length; i++) {
+        stdout.write(guideLines[i]);
+        if (i < guideLines.length - 1) {
           stdout.write('\n');
         }
       }
+      totalLines += guideLines.length;
       
-      // Move cursor back up
-      stdout.write(`\x1b[${this.suggestions.length}A`);
-      // Position cursor correctly (recalculate without ANSI codes)
-      const finalCursorCol = 'omk > '.length + this.cursor + 1;
-      stdout.write(`\x1b[${finalCursorCol}G`);
+      // Move cursor back up to the input area
+      stdout.write(`\x1b[${guideLines.length}A`);
     }
+    // Show suggestions if not in guide mode
+    else if (this.suggestions.length > 0) {
+      stdout.write('\n');
+
+      // Group suggestions by category
+      const grouped = new Map<string, AssistItem[]>();
+      for (const item of this.suggestions) {
+        const cat = item.category || 'Other';
+        if (!grouped.has(cat)) grouped.set(cat, []);
+        grouped.get(cat)!.push(item);
+      }
+
+      let displayIndex = 0;
+      let linesWritten = 0;
+
+      for (const [category, items] of grouped) {
+        // Category header
+        if (grouped.size > 1 && items.length > 0) {
+          stdout.write(`\x1b[90m${category}:\x1b[0m\n`);
+          linesWritten++;
+        }
+
+        for (let i = 0; i < items.length; i++) {
+          const sug = items[i];
+          const isSelected = displayIndex === this.selectedIndex;
+
+          if (isSelected) {
+            stdout.write('\x1b[7m'); // Invert colors
+          }
+
+          // Type indicator
+          let icon = '  ';
+          if (sug.type === 'command') icon = '\x1b[36m/ \x1b[0m';
+          else if (sug.type === 'tool') icon = '\x1b[33m$ \x1b[0m';
+          else if (sug.type === 'skill') icon = '\x1b[35m$ \x1b[0m';
+          else if (sug.type === 'file') icon = '\x1b[32m@ \x1b[0m';
+
+          stdout.write(`${icon}${sug.display.padEnd(25)}`);
+
+          if (sug.hint) {
+            stdout.write(`\x1b[90m${sug.hint}\x1b[0m`);
+          }
+
+          if (isSelected) {
+            stdout.write('\x1b[0m'); // Reset
+          }
+
+          displayIndex++;
+          linesWritten++;
+          
+          if (displayIndex < this.suggestions.length) {
+            stdout.write('\n');
+          }
+        }
+      }
+
+      // Move cursor back up to the input area
+      stdout.write(`\x1b[${linesWritten}A`);
+      totalLines += linesWritten;
+    }
+
+    // Position cursor within the input (accounting for line wrapping)
+    const cursorVisualOffset = promptWidth + this.cursor;
+    const cursorLine = Math.max(0, Math.floor(cursorVisualOffset / termWidth));
+    const cursorCol = (cursorVisualOffset % termWidth) + 1;
+    const endOfInputLine = Math.max(0, Math.floor((promptWidth + inputWidth) / termWidth));
+
+    const linesUp = endOfInputLine - cursorLine;
+    if (linesUp > 0) {
+      stdout.write(`\x1b[${linesUp}A`);
+    }
+
+    stdout.write(`\x1b[${cursorCol}G`);
+
+    this.renderedLines = totalLines;
   }
 
   /**
@@ -443,21 +714,8 @@ export class InteractiveAutocomplete {
    */
   private cleanup(): void {
     this.isActive = false;
-    
-    // Clear suggestions lines
-    if (this.suggestions.length > 0) {
-      stdout.write(`\x1b[${this.suggestions.length}B`);
-      for (let i = 0; i < this.suggestions.length; i++) {
-        stdout.write('\x1b[2K\r');
-        if (i < this.suggestions.length - 1) {
-          stdout.write('\n');
-        }
-      }
-      stdout.write(`\x1b[${this.suggestions.length}A`);
-    }
-    
+    this.clearPreviousRender();
     stdout.write('\n');
-    
     stdin.setRawMode(false);
     stdin.pause();
     stdin.removeAllListeners('data');

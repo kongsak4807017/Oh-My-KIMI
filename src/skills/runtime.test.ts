@@ -6,6 +6,7 @@ import { tmpdir } from 'node:os';
 
 import {
   detectSkillInvocations,
+  isActionableAgentRequest,
   listAvailableSkills,
   loadSkillContent,
   normalizeSkillName,
@@ -19,7 +20,7 @@ test('normalizeSkillName applies aliases and strips dollar prefix', () => {
 });
 
 test('stripCliFlags removes OMK CLI flags while preserving free-form args', () => {
-  const args = ['--browser', '--high', '--provider', 'cli', 'implement', 'feature', '--yolo'];
+  const args = ['--browser', '--high', '--provider', 'cli', '--api-key', 'secret', 'implement', 'feature', '--yolo'];
   assert.deepEqual(stripCliFlags(args), ['implement', 'feature']);
 });
 
@@ -40,6 +41,12 @@ test('detectSkillInvocations falls back to keyword routing when no explicit skil
   );
 });
 
+test('isActionableAgentRequest detects English and Thai execution intent', () => {
+  assert.equal(isActionableAgentRequest('please inspect this repo and run tests'), true);
+  assert.equal(isActionableAgentRequest('ตรวจ process ใน workspace ให้หน่อย'), true);
+  assert.equal(isActionableAgentRequest('what is a promise in JavaScript?'), false);
+});
+
 test('listAvailableSkills and loadSkillContent read project skill directories', () => {
   const cwd = mkdtempSync(join(tmpdir(), 'omk-runtime-'));
 
@@ -50,7 +57,9 @@ test('listAvailableSkills and loadSkillContent read project skill directories', 
     writeFileSync(join(skillsRoot, 'plan', 'SKILL.md'), '# plan');
     writeFileSync(join(skillsRoot, 'build-fix', 'SKILL.md'), '# build-fix');
 
-    assert.deepEqual(listAvailableSkills(cwd), ['build-fix', 'plan']);
+    const skills = listAvailableSkills(cwd);
+    assert(skills.includes('build-fix'));
+    assert(skills.includes('plan'));
 
     const skill = loadSkillContent(cwd, 'plan');
     assert(skill);

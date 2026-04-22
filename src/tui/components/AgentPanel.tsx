@@ -28,10 +28,10 @@ interface AgentPanelProps {
 const getStatusIcon = (status: Agent['status']) => {
   switch (status) {
     case 'running': return <Text color="yellow"><Spinner /></Text>;
-    case 'waiting': return <Text color="gray">~</Text>;
-    case 'completed': return <Text color="green">+</Text>;
-    case 'error': return <Text color="red">!</Text>;
-    default: return <Text color="gray">o</Text>;
+    case 'waiting': return <Text color="gray">.</Text>;
+    case 'completed': return <Text color="green">ok</Text>;
+    case 'error': return <Text color="red">!!</Text>;
+    default: return <Text color="gray">--</Text>;
   }
 };
 
@@ -47,8 +47,8 @@ const getStatusColor = (status: Agent['status']) => {
 const getActivityIcon = (status: Activity['status']) => {
   switch (status) {
     case 'running': return <Text color="yellow"><Spinner /></Text>;
-    case 'completed': return <Text color="green">+</Text>;
-    case 'error': return <Text color="red">!</Text>;
+    case 'completed': return <Text color="green">ok</Text>;
+    case 'error': return <Text color="red">!!</Text>;
     case 'info': return <Text color="blue">i</Text>;
     default: return <Text color="gray">.</Text>;
   }
@@ -59,8 +59,9 @@ export const AgentPanel: React.FC<AgentPanelProps> = ({ agents, activities, widt
 
   return (
     <Box width={width} flexDirection="column" borderStyle="single" borderColor="gray" paddingX={1}>
-      <Box marginBottom={1}>
-        <Text bold color="cyan">ACTIVE AGENTS</Text>
+      <Box marginBottom={1} justifyContent="space-between">
+        <Text bold color="cyan">AGENTS</Text>
+        <Text color="gray">{agents.length} lanes</Text>
       </Box>
 
       {agents.length === 0 ? (
@@ -94,7 +95,7 @@ export const AgentPanel: React.FC<AgentPanelProps> = ({ agents, activities, widt
       </Box>
 
       <Box marginBottom={1}>
-        <Text color="gray" underline>Agent Timeline</Text>
+        <Text color="gray" underline>Timeline</Text>
       </Box>
 
       {recentActivities.length === 0 ? (

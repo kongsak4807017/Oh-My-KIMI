@@ -5,15 +5,16 @@
 
 import React from 'react';
 import { Box, Text } from 'ink';
-import { ContextUsage } from '../types.js';
+import { ContextUsage, TokenUsage } from '../types.js';
 
 interface FooterProps {
   mode: string;
   contextUsage: ContextUsage;
+  tokenUsage: TokenUsage;
   showAgents: boolean;
 }
 
-export const Footer: React.FC<FooterProps> = ({ mode, contextUsage, showAgents }) => {
+export const Footer: React.FC<FooterProps> = ({ mode, contextUsage, tokenUsage, showAgents }) => {
   const percentage = contextUsage.percentage.toFixed(1);
   const usageColor = contextUsage.percentage > 80 ? 'red' : 
                      contextUsage.percentage > 50 ? 'yellow' : 'green';
@@ -22,21 +23,20 @@ export const Footer: React.FC<FooterProps> = ({ mode, contextUsage, showAgents }
   const barWidth = 20;
   const filled = Math.round((contextUsage.percentage / 100) * barWidth);
   const empty = barWidth - filled;
-  const bar = '█'.repeat(filled) + '░'.repeat(empty);
+  const bar = '#'.repeat(filled) + '-'.repeat(empty);
   
   return (
     <Box 
-      height={3} 
+      height={5} 
       flexDirection="column" 
       borderStyle="single" 
       borderColor="gray"
       paddingX={1}
     >
       <Box justifyContent="space-between">
-        {/* Context Usage */}
         <Box>
-          <Text color="gray">Context: </Text>
-          <Text color={usageColor}>{bar}</Text>
+          <Text color="gray">Context </Text>
+          <Text color={usageColor}>[{bar}]</Text>
           <Text color={usageColor}> {percentage}%</Text>
           <Text color="gray"> ({(contextUsage.used / 1024).toFixed(1)}k/{(contextUsage.total / 1024).toFixed(1)}k)</Text>
         </Box>
@@ -50,10 +50,31 @@ export const Footer: React.FC<FooterProps> = ({ mode, contextUsage, showAgents }
           <Text color="cyan">{mode}</Text>
         </Box>
       </Box>
+
+      <Box justifyContent="space-between">
+        <Box>
+          <Text color="gray">Tokens </Text>
+          <Text color="cyan">in {tokenUsage.input.toLocaleString()}</Text>
+          <Text color="gray"> | </Text>
+          <Text color="green">out {tokenUsage.output.toLocaleString()}</Text>
+          <Text color="gray"> | </Text>
+          <Text color="yellow">ctx {tokenUsage.context.toLocaleString()}</Text>
+          <Text color="gray"> | total {tokenUsage.total.toLocaleString()}</Text>
+        </Box>
+        <Box>
+          <Text color="gray">Limit </Text>
+          <Text color={usageColor}>{tokenUsage.limit.toLocaleString()}</Text>
+        </Box>
+      </Box>
+
+      <Box>
+        <Text color="gray">Route </Text>
+        <Text color="white" wrap="truncate-end">{tokenUsage.routes.join(' -> ') || 'input -> provider -> output'}</Text>
+      </Box>
       
       <Box>
         <Text color="gray" dimColor>
-          Press Enter to send | Use ↑↓ to navigate history
+          / commands | @ files | $ skills/tools | Tab accept | arrows select | Ctrl+C exit
         </Text>
       </Box>
     </Box>

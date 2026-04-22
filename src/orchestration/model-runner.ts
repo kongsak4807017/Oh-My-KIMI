@@ -93,7 +93,7 @@ export async function runModelToolLoop(
   prompt: string,
   cwd: string,
   options: ModelRunOptions = {},
-  loopOptions: { maxIterations?: number; executeTextActions?: boolean; showEvidence?: boolean; systemPrompt?: string } = {}
+  loopOptions: { maxIterations?: number; executeTextActions?: boolean; showEvidence?: boolean; systemPrompt?: string; silent?: boolean } = {}
 ): Promise<RunResult> {
   const provider = await getInitializedProvider(options);
   const maxIterations = loopOptions.maxIterations ?? 5;
@@ -104,8 +104,12 @@ export async function runModelToolLoop(
       content:
         [
           'You are an autonomous coding agent.',
+          'Default to acting like an agent, not a chatbot: gather evidence, execute the next concrete step, verify, then summarize.',
           'Use the provided tools when reading files, writing files, searching, spawning subagents, or running verification commands.',
-          'For implementation or investigation requests, do not merely describe capabilities. Call tools and then summarize what actually happened.',
+          'For implementation, investigation, review, diagnosis, or workspace-specific questions, do not merely describe capabilities. Call tools and then summarize what actually happened.',
+          'For pure conceptual questions that do not depend on the workspace, answer directly without unnecessary tools.',
+          'If native function calling is unavailable, emit one text action per line using forms such as $read_file path="src/index.ts", $search_files path="." pattern="TODO", $rag_search query="provider routing", or $execute_command command="npm test".',
+          'Do not claim files were inspected, commands were run, or work is complete unless tool evidence supports it.',
           'If the user says "do it" or "ทำเลย", infer the actionable task from recent context and execute it.',
           loopOptions.systemPrompt,
         ].filter(Boolean).join('\n'),
@@ -117,6 +121,9 @@ export async function runModelToolLoop(
   let stderr = '';
   let toolCallCount = 0;
   const showEvidence = loopOptions.showEvidence ?? true;
+  const writeOutput = (text: string): void => {
+    if (!loopOptions.silent) process.stdout.write(text);
+  };
 
   for (let iteration = 0; iteration < maxIterations; iteration++) {
     let response;
@@ -135,8 +142,8 @@ export async function runModelToolLoop(
 
     if (response.content) {
       stdout += response.content;
-      process.stdout.write(response.content);
-      if (!response.content.endsWith('\n')) process.stdout.write('\n');
+      writeOutput(response.content);
+      if (!response.content.endsWith('\n')) writeOutput('\n');
     }
 
     const toolCalls = response.toolCalls ?? [];
@@ -152,7 +159,7 @@ export async function runModelToolLoop(
         if (showEvidence) {
           const evidence = formatToolStart(toolCall);
           stdout += evidence;
-          process.stdout.write(evidence);
+          writeOutput(evidence);
         }
 
         const result = await executeToolCall(toolCall, cwd, options);
@@ -160,7 +167,7 @@ export async function runModelToolLoop(
         if (showEvidence) {
           const evidence = formatToolEnd(toolCall, result);
           stdout += evidence;
-          process.stdout.write(evidence);
+          writeOutput(evidence);
         }
         stdout += `\n[Tool ${toolCall.function.name}]\n${content}\n`;
         messages.push({
@@ -178,7 +185,7 @@ export async function runModelToolLoop(
       const execResults = await executeActions(textActions, cwd);
       const feedback = formatResultsForPrompt(execResults);
       stdout += feedback;
-      console.log(feedback);
+      if (!loopOptions.silent) console.log(feedback);
       messages.push({ role: 'assistant', content: response.content || '' });
       messages.push({ role: 'user', content: `Tool results are below. Continue or finish.\n${feedback}` });
       continue;
@@ -190,7 +197,7 @@ export async function runModelToolLoop(
   if (showEvidence && toolCallCount === 0) {
     const evidence = '[agent] No tools were called; no external process, file read/write, web fetch, or sub-agent work was executed.\n';
     stdout += evidence;
-    process.stdout.write(evidence);
+    writeOutput(evidence);
   }
 
   return { stdout, stderr, exitCode: 0, toolCalls: toolCallCount };

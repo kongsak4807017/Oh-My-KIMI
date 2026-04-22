@@ -33,6 +33,8 @@ import { startMCPServer, stopMCPServer } from '../mcp/server.js';
 import { getContextManager, ContextStats } from '../utils/context-manager.js';
 import { getCodebaseIndexer, getFileChunker, RepositoryMap } from '../indexer/index.js';
 import { getActivityLogger } from './activity-logger.js';
+import { showComprehensiveHelp, discoverAllSkills, getAllTools, getAllCommands, showQuickHelp } from './assist-suggestion.js';
+import { InteractiveAutocomplete } from './autocomplete-prompt.js';
 import { getGSDExecutor } from '../skills/gsd-executor.js';
 import { getFileSystemTools } from '../tools/file-system.js';
 import { getMemoryTools } from '../tools/memory.js';
@@ -43,6 +45,7 @@ import {
   buildSkillSystemPrompt,
   detectSkillInvocations,
   getWorkspaceAgentsContent,
+  isActionableAgentRequest,
   listAvailableSkills,
   loadSkillContent,
 } from '../skills/runtime.js';
@@ -75,6 +78,7 @@ const BUILTIN_COMMANDS = [
   '/context',
   '/tokens',
   '/cache',
+  '/rag',
   '/index',
   '/map',
   '/search',
@@ -99,8 +103,10 @@ export class OMKREPL {
   private sessionTitle: string | null = null;
   private gsdExecutor: ReturnType<typeof getGSDExecutor>;
   private availableSkills: string[] = [];
+  private autocomplete: InteractiveAutocomplete;
 
   constructor(private cwd: string = process.cwd()) {
+    this.autocomplete = new InteractiveAutocomplete(this.cwd);
     this.codebaseIndexer = getCodebaseIndexer(this.cwd);
     this.gsdExecutor = getGSDExecutor(this.cwd);
     this.availableSkills = listAvailableSkills(this.cwd);
@@ -122,6 +128,22 @@ export class OMKREPL {
     });
 
     this.setupEventHandlers();
+  }
+
+  /**
+   * Get user input with IDE-style autocomplete
+   */
+  private async getInputWithAutocomplete(): Promise<string> {
+    // Pause readline to let autocomplete take over
+    this.rl.pause();
+    
+    try {
+      const input = await this.autocomplete.prompt();
+      return input;
+    } finally {
+      // Resume readline for next iteration
+      this.rl.resume();
+    }
   }
 
   private getPrompt(): string {
@@ -205,7 +227,7 @@ export class OMKREPL {
     if (line.startsWith('$')) {
       const tools = [
         '$read_file', '$write_file', '$list_directory', '$search_files',
-        '$web_fetch', '$diagnostics', '$document_symbols', '$find_references',
+        '$web_fetch', '$web_search', '$rag_search', '$diagnostics', '$document_symbols', '$find_references',
         '$execute_command', '$memory_read', '$memory_write',
         ...skillPrefixes,
       ];
@@ -244,6 +266,7 @@ export class OMKREPL {
     yolo?: boolean;
     model?: string;
     baseUrl?: string;
+    apiKey?: string;
     apiKeyEnv?: string;
     headers?: Record<string, string>;
   }): Promise<void> {
@@ -254,7 +277,8 @@ export class OMKREPL {
     if (options?.yolo) {
       console.log('\n[WARNING] YOLO mode enabled - bypassing confirmations');
     }
-    console.log('\nWelcome to OMK');
+    console.log('\n🚀 Welcome to OMK');
+    showQuickHelp();
     
     // Initialize provider
     try {
@@ -264,6 +288,7 @@ export class OMKREPL {
         reasoning: (options?.reasoning as 'low' | 'medium' | 'high') || 'medium',
         model: options?.model,
         baseUrl: options?.baseUrl,
+        apiKey: options?.apiKey,
         apiKeyEnv: options?.apiKeyEnv,
         headers: options?.headers,
       });
@@ -299,7 +324,25 @@ export class OMKREPL {
 
     this.isRunning = true;
     
-    this.rl.prompt();
+    // Use IDE-style autocomplete loop instead of readline
+    await this.runInputLoop();
+  }
+
+  /**
+   * Main input loop with IDE-style autocomplete
+   */
+  private async runInputLoop(): Promise<void> {
+    while (this.isRunning) {
+      try {
+        const input = await this.getInputWithAutocomplete();
+        await this.handleInput(input.trim());
+      } catch (err) {
+        // User probably pressed Ctrl+C
+        if (this.isRunning) {
+          console.log('\nUse /exit or /quit to exit properly.');
+        }
+      }
+    }
   }
 
   private async handleInput(rawInput: string): Promise<void> {
@@ -430,6 +473,10 @@ export class OMKREPL {
         this.showCacheStats();
         break;
 
+      case '/rag':
+        await this.handleRag(args.join(' '));
+        break;
+
       case '/index':
         await this.buildCodebaseIndex();
         break;
@@ -503,7 +550,7 @@ export class OMKREPL {
 
     // Check if it's a tool command (file_system, web_fetch, etc.)
     const toolCommands = ['read_file', 'write_file', 'list_directory', 'search_files', 
-                          'web_fetch', 'diagnostics', 'document_symbols', 'find_references',
+                          'web_fetch', 'web_search', 'rag_search', 'diagnostics', 'document_symbols', 'find_references',
                           'execute_command', 'memory_read', 'memory_write'];
     
     if (toolCommands.includes(primarySkill)) {
@@ -661,6 +708,10 @@ export class OMKREPL {
         args = { path: argsStr.trim() };
       }
     }
+    if ((toolName === 'web_search' || toolName === 'rag_search') && !args.query && args.path) {
+      args = { ...args, query: args.path };
+      delete args.path;
+    }
 
     // Log tool call
     logger.addActivity({
@@ -681,6 +732,8 @@ export class OMKREPL {
         'list_directory': '$list_directory',
         'search_files': '$search_files',
         'web_fetch': '$web_fetch',
+        'web_search': '$web_search',
+        'rag_search': '$rag_search',
         'diagnostics': '$diagnostics',
         'document_symbols': '$document_symbols',
         'find_references': '$find_references',
@@ -717,6 +770,100 @@ export class OMKREPL {
         details: err instanceof Error ? err.message : String(err),
       });
     }
+  }
+
+  private async handleRag(argsStr: string): Promise<void> {
+    const args = this.parseRagArgs(argsStr);
+    if (!args.query) {
+      console.log('Usage: /rag <query> [--web] [--rebuild] [--tokens <n>] [--files <n>] [--chunks <n>]');
+      return;
+    }
+
+    const logger = getActivityLogger();
+    logger.addActivity({
+      type: 'reading',
+      agent: 'rag',
+      role: 'retriever',
+      message: `Retrieving compact context for: ${args.query}`,
+      status: 'running',
+      details: args.includeWeb ? 'local index + web snippets' : 'local index snippets',
+    });
+
+    try {
+      const { getRagSearchTool } = await import('../tools/rag.js');
+      const result = await getRagSearchTool(this.cwd).search(args);
+      logger.addActivity({
+        type: 'complete',
+        agent: 'rag',
+        role: 'retriever',
+        message: `RAG context ready`,
+        status: 'completed',
+        details: `${result.sources.length} sources, ~${result.estimatedTokens} tokens`,
+      });
+
+      console.log('');
+      console.log(result.context);
+      console.log('');
+    } catch (err) {
+      logger.addActivity({
+        type: 'error',
+        agent: 'rag',
+        role: 'retriever',
+        message: 'RAG retrieval failed',
+        status: 'failed',
+        details: err instanceof Error ? err.message : String(err),
+      });
+      console.error('[ERROR] RAG retrieval failed:', err instanceof Error ? err.message : String(err));
+    }
+  }
+
+  private parseRagArgs(argsStr: string): {
+    query: string;
+    includeWeb?: boolean;
+    maxTokens?: number;
+    maxFiles?: number;
+    maxChunks?: number;
+    maxWebResults?: number;
+    rebuildIndex?: boolean;
+  } {
+    const tokens = argsStr.split(/\s+/).filter(Boolean);
+    const queryParts: string[] = [];
+    const args: {
+      query: string;
+      includeWeb?: boolean;
+      maxTokens?: number;
+      maxFiles?: number;
+      maxChunks?: number;
+      maxWebResults?: number;
+      rebuildIndex?: boolean;
+    } = { query: '' };
+
+    for (let i = 0; i < tokens.length; i++) {
+      const token = tokens[i];
+      const next = tokens[i + 1];
+      if (token === '--web') {
+        args.includeWeb = true;
+      } else if (token === '--rebuild') {
+        args.rebuildIndex = true;
+      } else if (token === '--tokens' && next) {
+        args.maxTokens = Number(next);
+        i++;
+      } else if (token === '--files' && next) {
+        args.maxFiles = Number(next);
+        i++;
+      } else if (token === '--chunks' && next) {
+        args.maxChunks = Number(next);
+        i++;
+      } else if (token === '--web-results' && next) {
+        args.maxWebResults = Number(next);
+        i++;
+      } else {
+        queryParts.push(token);
+      }
+    }
+
+    args.query = queryParts.join(' ').trim();
+    return args;
   }
 
   private async handleGSDCommand(command: string, args: string): Promise<void> {
@@ -766,6 +913,10 @@ export class OMKREPL {
   private async handleChat(input: string): Promise<void> {
     // Check if input contains GitHub URL
     const githubUrlMatch = input.match(/https:\/\/github\.com\/[^\s]+/);
+    if (githubUrlMatch && input.includes('ศึกษา')) {
+      await this.handleRepoAnalysis(githubUrlMatch[0], input);
+      return;
+    }
     
     if (githubUrlMatch && (input.includes('clone') || input.includes('download') || input.includes('ศึกษา'))) {
       // Handle repo analysis
@@ -1223,22 +1374,26 @@ export class OMKREPL {
 
   private detectTaskType(input: string): string {
     const lower = input.toLowerCase();
-    if (lower.includes('http') || lower.includes('github') || lower.includes('clone')) {
+    if (lower.includes('http') || lower.includes('github') || lower.includes('clone') || lower.includes('ศึกษา')) {
       return 'repository-analysis';
     }
-    if (lower.includes('fix') || lower.includes('bug') || lower.includes('error')) {
+    if (lower.includes('fix') || lower.includes('bug') || lower.includes('error') || lower.includes('แก้')) {
       return 'debugging';
     }
-    if (lower.includes('plan') || lower.includes('phase') || lower.includes('progression')) {
+    if (lower.includes('plan') || lower.includes('phase') || lower.includes('progression') || lower.includes('แผน')) {
       return 'planning';
     }
-    if (lower.includes('refactor') || lower.includes('rewrite')) {
+    if (lower.includes('refactor') || lower.includes('rewrite') || lower.includes('ปรับ')) {
       return 'refactoring';
+    }
+    if (lower.includes('analyze') || lower.includes('inspect') || lower.includes('review') || lower.includes('ตรวจ') || lower.includes('วิเคราะห์')) {
+      return 'debugging';
     }
     return 'general-chat';
   }
 
   private shouldUseAgentLoop(input: string): boolean {
+    if (isActionableAgentRequest(input)) return true;
     const lower = input.toLowerCase();
     return /(?:ทำเลย|จัดการ|แก้|สร้าง|เขียน|อ่าน|ตรวจ|ค้นหา|รัน|ทดสอบ|อัปโหลด|อัพโหลด|ทำงานจริง|หลักฐาน|spawn|sub[-_ ]?agent|web[_ ]?search|web[_ ]?fetch|execute|run|fix|create|write|read|search|test|commit|push|implement)/i.test(lower);
   }
@@ -1269,6 +1424,7 @@ export class OMKREPL {
   /context           Show full context
   /tokens            Show token usage stats
   /cache             Show cache statistics
+  /rag <query>       Retrieve compact local/web context
   /index             Build codebase index (for large projects)
   /map               Show repository overview
   /search <symbol>   Search symbols in codebase
@@ -1589,7 +1745,7 @@ export class OMKREPL {
       const current = this.providerManager.getCurrentType();
       console.log(`Current provider: ${current || 'not initialized'}`);
       console.log('Usage: /model <provider> [options]');
-      console.log('Providers: api, kimi, openrouter, custom, browser, cli');
+      console.log('Providers: api, kimi, openrouter, custom, browser, cli, kimi-cli, gemini-cli, codex-cli');
       return;
     }
 
@@ -1658,6 +1814,8 @@ export class OMKREPL {
     console.log('');
     console.log('\x1b[33mWeb:\x1b[0m');
     console.log('  $web_fetch <url>            Fetch URL content');
+    console.log('  $web_search <query>         Search web result links/snippets');
+    console.log('  $rag_search <query>         Retrieve compact local/web RAG context');
     console.log('');
     console.log('\x1b[33mCode Intelligence:\x1b[0m');
     console.log('  $diagnostics [path]         Run TypeScript diagnostics');
@@ -1745,7 +1903,10 @@ export class OMKREPL {
   }
 }
 
-// Factory function
+// Kimi-style REPL export
+export { KimiREPL, startKimiREPL } from './kimi-repl.js';
+
+// Factory function (legacy)
 export async function startREPL(
   cwd?: string, 
   options?: {
@@ -1754,6 +1915,7 @@ export async function startREPL(
     yolo?: boolean;
     model?: string;
     baseUrl?: string;
+    apiKey?: string;
     apiKeyEnv?: string;
     headers?: Record<string, string>;
   }

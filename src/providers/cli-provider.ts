@@ -1,258 +1,287 @@
 /**
- * CLI Provider - Use official Kimi CLI if available
- * Falls back to other providers if CLI not found
+ * OAuth-backed CLI providers.
+ *
+ * These providers do not copy or read tokens. They run the native CLI so OMK can
+ * reuse the login/session state already managed by Kimi CLI, Gemini CLI, or
+ * Codex CLI.
  */
 
 import { spawn } from 'child_process';
-import { 
-  Provider, 
-  ProviderConfig, 
-  ChatOptions, 
-  ChatResponse, 
-  StreamChunk 
+import { existsSync, mkdtempSync, readFileSync, rmSync } from 'fs';
+import { tmpdir } from 'os';
+import { join } from 'path';
+import {
+  Provider,
+  ProviderConfig,
+  ProviderType,
+  ChatOptions,
+  ChatResponse,
+  StreamChunk,
 } from './types.js';
 
-export class CLIProvider implements Provider {
-  readonly name = 'Kimi CLI';
-  readonly type = 'cli' as const;
-  
-  private config: ProviderConfig = {
-    type: 'cli',
-    cliPath: 'kimi',
-    timeout: 600000, // 10 minutes for complex tasks
+export type CLIProviderProfile = 'kimi' | 'gemini' | 'codex';
+
+interface CLIInvocation {
+  command: string;
+  args: string[];
+  stdin?: string;
+  outputFile?: string;
+  cleanupDir?: string;
+}
+
+const PROFILE_DEFAULTS: Record<CLIProviderProfile, {
+  type: Extract<ProviderType, 'cli' | 'kimi-cli' | 'gemini-cli' | 'codex-cli'>;
+  name: string;
+  command: string;
+  authHint: string;
+}> = {
+  kimi: {
+    type: 'kimi-cli',
+    name: 'Kimi CLI OAuth',
+    command: 'kimi',
+    authHint: 'Run: kimi login',
+  },
+  gemini: {
+    type: 'gemini-cli',
+    name: 'Gemini CLI OAuth',
+    command: 'gemini',
+    authHint: 'Run: gemini auth login or launch gemini once and sign in',
+  },
+  codex: {
+    type: 'codex-cli',
+    name: 'Codex CLI OAuth',
+    command: 'codex',
+    authHint: 'Run: codex login',
+  },
+};
+
+function formatMessages(options: ChatOptions): string {
+  if (options.messages.length === 1) {
+    return options.messages[0]?.content ?? '';
+  }
+
+  return options.messages
+    .map((message) => `${message.role.toUpperCase()}:\n${message.content}`)
+    .join('\n\n');
+}
+
+function createCodexOutputFile(): { file: string; dir: string } {
+  const dir = mkdtempSync(join(tmpdir(), 'omk-codex-'));
+  return {
+    dir,
+    file: join(dir, 'last-message.txt'),
   };
+}
+
+export function buildCLIInvocation(
+  profile: CLIProviderProfile,
+  config: ProviderConfig,
+  options: ChatOptions,
+): CLIInvocation {
+  const defaults = PROFILE_DEFAULTS[profile];
+  const command = config.cliPath ?? defaults.command;
+  const prompt = formatMessages(options);
+  const model = options.model ?? config.model;
+  const extraArgs = config.cliArgs ?? [];
+
+  if (profile === 'kimi') {
+    const args = ['--print', '--final-message-only', '--input-format', 'text'];
+    if ((options.reasoning ?? config.reasoning) === 'high') {
+      args.push('--thinking');
+    }
+    if (model) {
+      args.push('--model', model);
+    }
+    args.push(...extraArgs);
+    return { command, args, stdin: prompt };
+  }
+
+  if (profile === 'gemini') {
+    const args = ['--prompt', prompt, '--output-format', 'text'];
+    if (model) {
+      args.push('--model', model);
+    }
+    args.push(...extraArgs);
+    return { command, args };
+  }
+
+  const { file, dir } = createCodexOutputFile();
+  const args = [
+    'exec',
+    '--color',
+    'never',
+    '--skip-git-repo-check',
+    '--sandbox',
+    'read-only',
+    '--output-last-message',
+    file,
+  ];
+  if (model) {
+    args.push('--model', model);
+  }
+  args.push(...extraArgs, '-');
+  return { command, args, stdin: prompt, outputFile: file, cleanupDir: dir };
+}
+
+export class CLIProvider implements Provider {
+  readonly name: string;
+  readonly type: ProviderType;
+
+  private config: ProviderConfig;
+  private profile: CLIProviderProfile;
+
+  constructor(profile: CLIProviderProfile = 'kimi', type?: Extract<ProviderType, 'cli' | 'kimi-cli' | 'gemini-cli' | 'codex-cli'>) {
+    const defaults = PROFILE_DEFAULTS[profile];
+    this.profile = profile;
+    this.type = type ?? defaults.type;
+    this.name = type === 'cli' ? 'Kimi CLI' : defaults.name;
+    this.config = {
+      type: this.type,
+      cliPath: defaults.command,
+      timeout: 600000,
+    };
+  }
 
   async initialize(config: ProviderConfig): Promise<void> {
-    this.config = { ...this.config, ...config };
-    
-    // Check if CLI is available
+    this.config = { ...this.config, ...config, type: this.type };
+
     const available = await this.isAvailable();
     if (!available) {
+      const defaults = PROFILE_DEFAULTS[this.profile];
       throw new Error(
-        'Kimi CLI not found.\n' +
-        'Install with: (if available)\n' +
-        '  npm install -g @moonshot-ai/kimi-cli\n' +
-        'Or use --provider=api or --provider=browser instead.'
+        `${this.name} not found or not runnable.\n` +
+        `Install and authenticate the native CLI first.\n` +
+        `${defaults.authHint}\n` +
+        'Or choose another provider with --provider openrouter, --provider custom, or --browser.'
       );
     }
   }
 
   async isAvailable(): Promise<boolean> {
     return new Promise((resolve) => {
-      const check = spawn(this.config.cliPath ?? 'kimi', ['--version'], {
+      const command = this.config.cliPath ?? PROFILE_DEFAULTS[this.profile].command;
+      const check = spawn(command, ['--version'], {
         stdio: 'ignore',
-        shell: true,
+        shell: process.platform === 'win32',
       });
-      
-      check.on('exit', (code) => {
-        resolve(code === 0);
-      });
-      
-      check.on('error', () => {
-        resolve(false);
-      });
-      
-      // Timeout after 5 seconds
+
+      let settled = false;
+      const finish = (available: boolean) => {
+        if (settled) return;
+        settled = true;
+        resolve(available);
+      };
+
+      check.on('exit', (code) => finish(code === 0));
+      check.on('error', () => finish(false));
+
       setTimeout(() => {
         check.kill();
-        resolve(false);
-      }, 5000);
+        finish(false);
+      }, 5000).unref?.();
     });
   }
 
   async chat(options: ChatOptions): Promise<ChatResponse> {
-    const lastMessage = options.messages[options.messages.length - 1];
-    const content = lastMessage?.content ?? '';
+    const invocation = buildCLIInvocation(this.profile, this.config, options);
+    try {
+      const { stdout, stderr, code } = await this.run(invocation);
+      let content = invocation.outputFile && existsSync(invocation.outputFile)
+        ? readFileSync(invocation.outputFile, 'utf-8').trim()
+        : stdout.trim();
 
-    return new Promise((resolve, reject) => {
-      // Kimi CLI v1.24+ syntax: kimi --print --final-message-only -p "prompt"
-      const useStdin = process.platform === 'win32' && content.includes(' ');
-      
-      const args = ['--print', '--final-message-only'];
-      
-      if (this.config.reasoning === 'high') {
-        args.push('--thinking');
+      if (!content && stdout.trim()) {
+        content = stdout.trim();
       }
-      
-      // Add yolo mode to prevent interactive prompts
-      args.push('--yolo');
-      
-      if (useStdin) {
-        args.push('--input-format', 'text');
-      } else {
-        args.push('-p', content);
+
+      // Include stderr in content if stdout is empty (shows CLI errors like "LLM not set")
+      if (!content && stderr.trim()) {
+        content = `[${this.name} Error] ${stderr.trim()}`;
       }
-      
-      // Fix Windows UTF-8 encoding
-      const isWindows = process.platform === 'win32';
-      const env = isWindows ? { ...process.env, PYTHONIOENCODING: 'utf-8', CHCP: '65001' } : process.env;
-      
-      const child = spawn(this.config.cliPath ?? 'kimi', args, {
-        stdio: ['pipe', 'pipe', 'pipe'],
-        shell: true,
-        env,
-      });
-      
-      // Send content via stdin if using stdin mode
-      if (useStdin) {
-        child.stdin?.write(content);
-        child.stdin?.end();
+
+      if (code !== 0 && !content) {
+        throw new Error(`${this.name} exited with code ${code}: ${stderr || stdout}`);
       }
-      
-      let output = '';
-      let error = '';
-      
-      child.stdout?.on('data', (data) => {
-        output += data.toString();
-      });
-      
-      child.stderr?.on('data', (data) => {
-        error += data.toString();
-      });
-      
-      child.on('exit', (code) => {
-        if (code === 0 || (code === null && output.length > 0)) {
-          resolve({
-            content: output.trim(),
-            usage: undefined,
-          });
-        } else {
-          reject(new Error(`CLI exited with code ${code}: ${error || output}`));
-        }
-      });
-      
-      child.on('error', (err) => {
-        reject(new Error(`Failed to run CLI: ${err.message}`));
-      });
-      
-      // Timeout - kimi can be slow for complex tasks
-      setTimeout(() => {
-        child.kill();
-        if (output.length > 0) {
-          resolve({ content: output.trim(), usage: undefined });
-        } else {
-          reject(new Error('CLI command timed out'));
-        }
-      }, this.config.timeout ?? 120000);
-    });
+
+      return {
+        content,
+        usage: undefined,
+      };
+    } finally {
+      if (invocation.cleanupDir) {
+        rmSync(invocation.cleanupDir, { recursive: true, force: true });
+      }
+    }
   }
 
   async *stream(options: ChatOptions): AsyncGenerator<StreamChunk> {
-    const lastMessage = options.messages[options.messages.length - 1];
-    const content = lastMessage?.content ?? '';
-
-    if (!content) {
-      yield { content: 'Error: No content to send', done: true };
-      return;
+    const response = await this.chat(options);
+    if (response.content) {
+      yield { content: response.content, done: false };
     }
-
-    // Fix Windows UTF-8 encoding by setting console code page
-    const isWindows = process.platform === 'win32';
-    const env = { ...process.env };
-    
-    if (isWindows) {
-      // Force UTF-8 encoding for Python/Kimi CLI
-      env.PYTHONIOENCODING = 'utf-8';
-      env.CHCP = '65001';  // UTF-8 code page
-    }
-
-    // Kimi CLI v1.24+ syntax: kimi --print --final-message-only -p "prompt"
-    // Note: On Windows with spaces, use stdin instead of -p flag
-    const useStdin = process.platform === 'win32' && content.includes(' ');
-    
-    const args = ['--print', '--final-message-only'];
-    
-    // Add thinking mode if reasoning is high
-    if (this.config.reasoning === 'high') {
-      args.push('--thinking');
-    }
-    
-    // Add yolo mode to prevent interactive prompts
-    args.push('--yolo');
-    
-    if (useStdin) {
-      // Use stdin for complex prompts on Windows
-      args.push('--input-format', 'text');
-    } else {
-      // Use -p flag for simple prompts
-      args.push('-p', content);
-    }
-
-    const cliPath = this.config.cliPath ?? 'kimi';
-    
-    // Spawn with UTF-8 environment on Windows
-    const spawnOptions: any = {
-      stdio: ['pipe', 'pipe', 'pipe'],
-      shell: true,
-    };
-    
-    if (isWindows) {
-      spawnOptions.env = env;
-    }
-    
-    const child = spawn(cliPath, args, spawnOptions);
-    
-    // Send content via stdin if using stdin mode
-    if (useStdin) {
-      child.stdin?.write(content);
-      child.stdin?.end();
-    }
-
-    let buffer = '';
-    let hasError = false;
-    
-    child.stdout?.on('data', (data) => {
-      buffer += data.toString();
-    });
-
-    child.stderr?.on('data', (data) => {
-      const err = data.toString();
-      // Filter out non-error messages and box-drawing characters
-      const isRealError = err.includes('Error') && 
-                         !err.includes('Try') && 
-                         !err.includes('────') &&
-                         !err.includes('┌') &&
-                         !err.includes('┐') &&
-                         !err.includes('└') &&
-                         !err.includes('┘') &&
-                         !err.includes('│');
-      if (isRealError) {
-        hasError = true;
-        // Clean up error message
-        const cleanErr = err
-          .replace(/[─│┌┐└┘├┤┬┴┼]/g, '')
-          .replace(/Error\s*[-─]+\+/gi, 'Error: ')
-          .trim();
-        if (cleanErr.length > 10) {
-          buffer += `\n[Error: ${cleanErr}]`;
-        }
-      }
-    });
-
-    // Wait for process to complete
-    await new Promise<void>((resolve, reject) => {
-      child.on('exit', (code) => {
-        resolve();
-      });
-      child.on('error', (err) => {
-        reject(err);
-      });
-      // Timeout after 120 seconds
-      setTimeout(() => {
-        child.kill();
-        reject(new Error('Request timed out'));
-      }, 120000);
-    });
-
-    // Yield all output
-    if (buffer.length > 0) {
-      yield { content: buffer, done: false };
-    }
-
     yield { content: '', done: true };
   }
 
   async disconnect(): Promise<void> {
-    // Nothing to clean up for CLI mode
+    // Native CLIs own their sessions.
+  }
+
+  private run(invocation: CLIInvocation): Promise<{ stdout: string; stderr: string; code: number | null }> {
+    return new Promise((resolve, reject) => {
+      const env = process.platform === 'win32'
+        ? { ...process.env, PYTHONIOENCODING: 'utf-8', CHCP: '65001' }
+        : process.env;
+
+      const child = spawn(invocation.command, invocation.args, {
+        stdio: ['pipe', 'pipe', 'pipe'],
+        shell: process.platform === 'win32',
+        env,
+      });
+
+      let stdout = '';
+      let stderr = '';
+      let settled = false;
+      let timer: NodeJS.Timeout | undefined;
+
+      const settle = (fn: () => void) => {
+        if (settled) return;
+        settled = true;
+        if (timer) clearTimeout(timer);
+        fn();
+      };
+
+      child.stdout?.on('data', (data) => {
+        stdout += data.toString();
+      });
+
+      child.stderr?.on('data', (data) => {
+        stderr += data.toString();
+      });
+
+      child.on('exit', (code) => {
+        settle(() => resolve({ stdout, stderr, code }));
+      });
+
+      child.on('error', (err) => {
+        settle(() => reject(new Error(`Failed to run ${this.name}: ${err.message}`)));
+      });
+
+      if (invocation.stdin !== undefined) {
+        child.stdin?.write(invocation.stdin);
+      }
+      child.stdin?.end();
+
+      timer = setTimeout(() => {
+        child.kill();
+        settle(() => {
+          if (stdout.trim()) {
+            resolve({ stdout, stderr, code: null });
+          } else {
+            reject(new Error(`${this.name} command timed out`));
+          }
+        });
+      }, this.config.timeout ?? 600000);
+      timer.unref?.();
+    });
   }
 }

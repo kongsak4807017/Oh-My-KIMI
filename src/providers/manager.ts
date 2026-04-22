@@ -25,7 +25,10 @@ export class ProviderManager {
     this.providers.set('openrouter', new APIProvider('openrouter'));
     this.providers.set('custom', new APIProvider('custom'));
     this.providers.set('browser', new BrowserProvider());
-    this.providers.set('cli', new CLIProvider());
+    this.providers.set('cli', new CLIProvider('kimi', 'cli'));
+    this.providers.set('kimi-cli', new CLIProvider('kimi'));
+    this.providers.set('gemini-cli', new CLIProvider('gemini'));
+    this.providers.set('codex-cli', new CLIProvider('codex'));
   }
 
   /**
@@ -83,10 +86,25 @@ export class ProviderManager {
       }
     }
 
+    const cliPreference: ProviderType[] = ['codex-cli', 'gemini-cli', 'kimi-cli', 'cli'];
+    for (const type of cliPreference) {
+      const cli = this.providers.get(type)!;
+      try {
+        await cli.initialize(resolveProviderConfig({ type }));
+        const available = await cli.isAvailable();
+        if (available) {
+          console.log(`[OK] Using ${cli.name}`);
+          return type;
+        }
+      } catch {
+        // Continue to next CLI option.
+      }
+    }
+
     throw new Error(
-      'No API provider is configured.\n' +
+      'No provider is configured.\n' +
       'Run: omk config init openrouter --global --model <provider/model>\n' +
-      'Then set OPENROUTER_API_KEY, or choose an explicit fallback with --cli or --browser.'
+      'Then set OPENROUTER_API_KEY, or choose an OAuth CLI fallback with --codex-cli, --gemini-cli, --kimi-cli, or --browser.'
     );
   }
 
@@ -136,9 +154,30 @@ export class ProviderManager {
       {
         type: 'cli',
         name: 'Kimi CLI',
-        description: 'Official Kimi CLI if installed.',
+        description: 'Backward-compatible alias for the Kimi CLI OAuth provider.',
         requirements: ['kimi CLI installed'],
         isAvailable: await this.providers.get('cli')!.isAvailable(),
+      },
+      {
+        type: 'kimi-cli',
+        name: 'Kimi CLI OAuth',
+        description: 'Use the authenticated Kimi CLI session without copying tokens.',
+        requirements: ['kimi CLI installed and logged in'],
+        isAvailable: await this.providers.get('kimi-cli')!.isAvailable(),
+      },
+      {
+        type: 'gemini-cli',
+        name: 'Gemini CLI OAuth',
+        description: 'Use the authenticated Gemini CLI session without copying tokens.',
+        requirements: ['gemini CLI installed and logged in'],
+        isAvailable: await this.providers.get('gemini-cli')!.isAvailable(),
+      },
+      {
+        type: 'codex-cli',
+        name: 'Codex CLI OAuth',
+        description: 'Use the authenticated Codex CLI session without copying tokens.',
+        requirements: ['codex CLI installed and logged in'],
+        isAvailable: await this.providers.get('codex-cli')!.isAvailable(),
       },
       {
         type: 'browser',

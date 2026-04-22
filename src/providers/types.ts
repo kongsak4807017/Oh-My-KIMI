@@ -4,7 +4,17 @@
  * OpenRouter, and user-supplied custom gateways.
  */
 
-export type ProviderType = 'api' | 'kimi' | 'openrouter' | 'custom' | 'browser' | 'cli' | 'auto';
+export type ProviderType =
+  | 'api'
+  | 'kimi'
+  | 'openrouter'
+  | 'custom'
+  | 'browser'
+  | 'cli'
+  | 'kimi-cli'
+  | 'gemini-cli'
+  | 'codex-cli'
+  | 'auto';
 
 export type ReasoningEffort = 'low' | 'medium' | 'high';
 
@@ -24,6 +34,7 @@ export interface ProviderConfig {
   browserType?: 'chromium' | 'firefox' | 'webkit';
   // CLI mode
   cliPath?: string;
+  cliArgs?: string[];
   // Common
   timeout?: number;
   reasoning?: ReasoningEffort;

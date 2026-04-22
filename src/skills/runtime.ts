@@ -62,7 +62,19 @@ const KEYWORD_RULES: KeywordRule[] = [
   { skillName: 'ai-slop-cleaner', triggers: ['cleanup', 'refactor', 'deslop'] },
 ];
 
-const FLAGS_WITH_VALUES = new Set(['--provider', '--model', '--reasoning', '--base-url', '--api-key-env', '--header']);
+const ACTIONABLE_PATTERNS = [
+  // English developer intent.
+  /\b(?:analyze|audit|build|check|commit|create|debug|diagnose|edit|execute|fix|implement|inspect|investigate|patch|push|read|refactor|review|run|search|test|update|verify|write)\b/i,
+  /\b(?:codebase|repo|repository|workspace|project)\b/i,
+  /\b(?:npm|node|git|tsc|eslint|prettier|cargo|python|pytest)\b/i,
+  /(?:^|\s)(?:\.\/|src\/|dist\/|skills\/|\.omk\/|package\.json|tsconfig\.json|README\.md)\b/i,
+  /@[\w./-]+/,
+
+  // Thai developer intent.
+  /(?:ทำ|จัดการ|แก้|แก้ไข|สร้าง|เขียน|อ่าน|ตรวจ|ตรวจสอบ|ค้นหา|รัน|ทดสอบ|สรุป|วิเคราะห์|ปรับ|ดู|ทำงานจริง|หลักฐาน)/i,
+];
+
+const FLAGS_WITH_VALUES = new Set(['--provider', '--model', '--reasoning', '--base-url', '--api-key', '--api-key-env', '--header']);
 const FLAGS_WITHOUT_VALUES = new Set([
   '--api',
   '--kimi',
@@ -70,6 +82,9 @@ const FLAGS_WITHOUT_VALUES = new Set([
   '--custom',
   '--browser',
   '--cli',
+  '--kimi-cli',
+  '--gemini-cli',
+  '--codex-cli',
   '--high',
   '--thinking',
   '--yolo',
@@ -195,6 +210,13 @@ export function detectSkillInvocations(input: string): DetectedSkillInvocation[]
   }
 
   return keywordMatches;
+}
+
+export function isActionableAgentRequest(input: string): boolean {
+  const trimmed = input.trim();
+  if (!trimmed) return false;
+  if (trimmed.startsWith('/') || trimmed.startsWith('$')) return true;
+  return ACTIONABLE_PATTERNS.some(pattern => pattern.test(trimmed));
 }
 
 export function buildSkillSystemPrompt(args: {

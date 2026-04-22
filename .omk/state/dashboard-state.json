@@ -1,0 +1,9 @@
+{
+  "currentAgent": "idle",
+  "currentRole": "system",
+  "currentPhase": "waiting",
+  "currentTask": "Ready for input",
+  "latestEvent": "Idle",
+  "agents": [],
+  "timeline": []
+}

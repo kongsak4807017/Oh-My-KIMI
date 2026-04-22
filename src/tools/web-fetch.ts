@@ -14,6 +14,7 @@ export interface WebFetchInput {
 export interface WebSearchInput {
   query: string;
   maxResults?: number;
+  mode?: 'full' | 'instant';
 }
 
 export class WebFetchTool {
@@ -145,9 +146,28 @@ export class WebFetchTool {
 
   async search(input: WebSearchInput): Promise<{
     query: string;
-    results: Array<{ title: string; url: string; snippet: string }>;
+    results: Array<{ title: string; url: string; snippet: string; source?: string }>;
   }> {
     const maxResults = Math.max(1, Math.min(input.maxResults ?? 5, 10));
+    if (input.mode !== 'instant') {
+      try {
+        const htmlResults = await this.searchDuckDuckGoHtml(input.query, maxResults);
+        if (htmlResults.length > 0) {
+          return { query: input.query, results: htmlResults };
+        }
+      } catch {
+        // Fall back to the instant answer API below.
+      }
+      try {
+        const bingResults = await this.searchBingHtml(input.query, maxResults);
+        if (bingResults.length > 0) {
+          return { query: input.query, results: bingResults };
+        }
+      } catch {
+        // Fall back to the instant answer API below.
+      }
+    }
+
     const apiUrl = `https://api.duckduckgo.com/?q=${encodeURIComponent(input.query)}&format=json&no_html=1&skip_disambig=1`;
 
     const response = await fetch(apiUrl, {
@@ -167,12 +187,13 @@ export class WebFetchTool {
       RelatedTopics?: Array<any>;
     };
 
-    const results: Array<{ title: string; url: string; snippet: string }> = [];
+    const results: Array<{ title: string; url: string; snippet: string; source?: string }> = [];
     if (data.AbstractText && data.AbstractURL) {
       results.push({
         title: data.Heading || input.query,
         url: data.AbstractURL,
         snippet: data.AbstractText,
+        source: 'duckduckgo-instant',
       });
     }
 
@@ -188,6 +209,7 @@ export class WebFetchTool {
             title: topic.Text.split(' - ')[0] || topic.FirstURL,
             url: topic.FirstURL,
             snippet: topic.Text,
+            source: 'duckduckgo-instant',
           });
         }
       }
@@ -195,6 +217,95 @@ export class WebFetchTool {
 
     collect(data.RelatedTopics ?? []);
     return { query: input.query, results: results.slice(0, maxResults) };
+  }
+
+  private async searchDuckDuckGoHtml(query: string, maxResults: number): Promise<Array<{ title: string; url: string; snippet: string; source: string }>> {
+    const response = await fetch(`https://duckduckgo.com/html/?q=${encodeURIComponent(query)}`, {
+      headers: {
+        'User-Agent': 'Mozilla/5.0 (compatible; OMK-Bot/1.0)',
+        'Accept': 'text/html',
+      },
+    });
+
+    if (!response.ok) {
+      throw new Error(`Search failed: HTTP ${response.status}`);
+    }
+
+    const html = await response.text();
+    const results: Array<{ title: string; url: string; snippet: string; source: string }> = [];
+    const resultRegex = /<a[^>]+class="result__a"[^>]+href="([^"]+)"[^>]*>([\s\S]*?)<\/a>[\s\S]*?(?:<a[^>]+class="result__snippet"[^>]*>([\s\S]*?)<\/a>|<div[^>]+class="result__snippet"[^>]*>([\s\S]*?)<\/div>)/gi;
+
+    let match: RegExpExecArray | null;
+    while ((match = resultRegex.exec(html)) !== null && results.length < maxResults) {
+      const url = this.decodeDuckDuckGoUrl(this.decodeHtml(match[1]));
+      if (!url || url.startsWith('/')) continue;
+      results.push({
+        title: this.stripHtml(match[2]),
+        url,
+        snippet: this.stripHtml(match[3] ?? match[4] ?? ''),
+        source: 'duckduckgo-html',
+      });
+    }
+
+    return results;
+  }
+
+  private async searchBingHtml(query: string, maxResults: number): Promise<Array<{ title: string; url: string; snippet: string; source: string }>> {
+    const response = await fetch(`https://www.bing.com/search?q=${encodeURIComponent(query)}`, {
+      headers: {
+        'User-Agent': 'Mozilla/5.0 (compatible; OMK-Bot/1.0)',
+        'Accept': 'text/html',
+      },
+    });
+
+    if (!response.ok) {
+      throw new Error(`Search failed: HTTP ${response.status}`);
+    }
+
+    const html = await response.text();
+    const results: Array<{ title: string; url: string; snippet: string; source: string }> = [];
+    const resultRegex = /<li class="b_algo"[\s\S]*?<h2[^>]*>\s*<a[^>]+href="([^"]+)"[^>]*>([\s\S]*?)<\/a>\s*<\/h2>[\s\S]*?(?:<p[^>]*>([\s\S]*?)<\/p>)?/gi;
+
+    let match: RegExpExecArray | null;
+    while ((match = resultRegex.exec(html)) !== null && results.length < maxResults) {
+      const url = this.decodeHtml(match[1]);
+      if (!url || url.startsWith('/')) continue;
+      results.push({
+        title: this.stripHtml(match[2]),
+        url,
+        snippet: this.stripHtml(match[3] ?? ''),
+        source: 'bing-html',
+      });
+    }
+
+    return results;
+  }
+
+  private decodeDuckDuckGoUrl(raw: string): string {
+    try {
+      const url = raw.startsWith('//') ? `https:${raw}` : raw;
+      const parsed = new URL(url, 'https://duckduckgo.com');
+      const uddg = parsed.searchParams.get('uddg');
+      return uddg ? decodeURIComponent(uddg) : parsed.href;
+    } catch {
+      return raw;
+    }
+  }
+
+  private stripHtml(value: string): string {
+    return this.decodeHtml(value.replace(/<[^>]+>/g, ' '))
+      .replace(/\s+/g, ' ')
+      .trim();
+  }
+
+  private decodeHtml(value: string): string {
+    return value
+      .replace(/&amp;/g, '&')
+      .replace(/&quot;/g, '"')
+      .replace(/&#x27;/g, "'")
+      .replace(/&#39;/g, "'")
+      .replace(/&lt;/g, '<')
+      .replace(/&gt;/g, '>');
   }
 }
 

@@ -7,6 +7,7 @@ export { WebFetchTool, getWebFetchTool } from './web-fetch.js';
 export { CodeIntelTools, getCodeIntelTools } from './code-intel.js';
 export { ExecuteTool, getExecuteTool } from './execute.js';
 export { MemoryTools, getMemoryTools } from './memory.js';
+export { RagSearchTool, getRagSearchTool } from './rag.js';
 
 // Tool definitions for AI
 export const toolDefinitions = [
@@ -60,6 +61,19 @@ export const toolDefinitions = [
     parameters: {
       query: 'Search query (required)',
       maxResults: 'Maximum results, 1-10 (default: 5)',
+    },
+  },
+  {
+    name: '$rag_search',
+    description: 'Retrieve compact local code snippets and optional web snippets for a query.',
+    parameters: {
+      query: 'Retrieval query (required)',
+      maxFiles: 'Maximum local files to inspect (default: 8)',
+      maxChunks: 'Maximum local snippets/chunks (default: 8)',
+      includeWeb: 'Also include web search snippets (default: false)',
+      maxWebResults: 'Maximum web results if includeWeb=true (default: 5)',
+      maxTokens: 'Approximate token budget for returned context (default: 6000)',
+      rebuildIndex: 'Force rebuilding .omk/index/rag-index.json (default: false)',
     },
   },
   {
@@ -216,6 +230,27 @@ export const openAIToolDefinitions = [
   {
     type: 'function' as const,
     function: {
+      name: 'rag_search',
+      description: 'Retrieve compact local code snippets and optional web snippets for a query. Use this before reading whole files or pages.',
+      parameters: {
+        type: 'object',
+        properties: {
+          query: { type: 'string' },
+          maxFiles: { type: 'number' },
+          maxChunks: { type: 'number' },
+          includeWeb: { type: 'boolean' },
+          maxWebResults: { type: 'number' },
+          maxTokens: { type: 'number' },
+          rebuildIndex: { type: 'boolean' },
+        },
+        required: ['query'],
+        additionalProperties: false,
+      },
+    },
+  },
+  {
+    type: 'function' as const,
+    function: {
       name: 'diagnostics',
       description: 'Run TypeScript diagnostics.',
       parameters: {
@@ -341,6 +376,7 @@ export class ToolDispatcher {
     const { getCodeIntelTools } = await import('./code-intel.js');
     const { getExecuteTool } = await import('./execute.js');
     const { getMemoryTools } = await import('./memory.js');
+    const { getRagSearchTool } = await import('./rag.js');
 
     const normalizedToolName = toolName.startsWith('$') ? toolName : `$${toolName}`;
 
@@ -362,6 +398,9 @@ export class ToolDispatcher {
 
       case '$web_search':
         return getWebFetchTool().search(args as any);
+
+      case '$rag_search':
+        return getRagSearchTool(this.cwd).search(args as any);
       
       case '$diagnostics':
         return getCodeIntelTools(this.cwd).diagnostics(args as any);
